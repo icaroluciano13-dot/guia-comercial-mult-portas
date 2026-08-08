@@ -4,6 +4,19 @@ A clean full-stack starter running on
 [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
 Drizzle support.
 
+## Versão pública no GitHub Pages
+
+Este repositório também contém uma versão estática do Guia Comercial Mult
+Portas. O workflow do GitHub Pages executa `npm run build:github` e publica o
+resultado em:
+
+`https://icaroluciano13-dot.github.io/guia-comercial-mult-portas/`
+
+A versão pública mantém o catálogo, controle, requisições, mensagens, voz e
+treino guiado salvos no navegador. O treinador generativo da rota `/api/coach`
+continua disponível somente em uma hospedagem com servidor e chave de API
+protegida; o GitHub Pages não recebe segredos.
+
 ## Prerequisites
 
 - Node.js `>=22.13.0`
