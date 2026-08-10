@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-type Section = "overview" | "script" | "training" | "timing" | "messages" | "factory" | "catalog" | "control" | "management";
+type Section = "overview" | "script" | "seller" | "training" | "timing" | "messages" | "factory" | "catalog" | "control" | "management";
 type BrandId = "dalcomad" | "destak" | "casmavi" | "aluan" | "brasil" | "crv" | "lucasa" | "riobras";
 type Priority = "Alta" | "Média" | "Baixa";
 type TrainingLevel = "Básico" | "Intermediário" | "Avançado";
@@ -138,8 +138,6 @@ const factoryFieldConfig: { key: FactoryField; label: string; placeholder: strin
   { key: "priceWithLock", label: "Valor com fechadura CR.", placeholder: "R$" },
 ];
 
-const factoryEditableFieldConfig = factoryFieldConfig.filter(({ key }) => key !== "manufacturer");
-
 const dalcomadColors = [
   "Branco TX",
   "Cinza Urban",
@@ -247,7 +245,7 @@ function normalizeFactoryState(value: unknown): FactoryRequestItem[] {
 }
 
 function hasFactoryContent(item: FactoryRequestItem) {
-  return factoryEditableFieldConfig.some(({ key }) => item[key].trim().length > 0);
+  return factoryFieldConfig.some(({ key }) => key !== "manufacturer" && item[key].trim().length > 0);
 }
 
 function parseFactoryPrice(value: string): number | string {
@@ -274,6 +272,7 @@ const STORAGE = {
 const sections: { id: Section; label: string; icon: string; description: string }[] = [
   { id: "overview", label: "Visão geral", icon: "⌂", description: "Comando do dia" },
   { id: "script", label: "Roteiro de venda", icon: "↗", description: "Do básico ao avançado" },
+  { id: "seller", label: "Ser um bom vendedor", icon: "★", description: "Postura e prática" },
   { id: "training", label: "Treino IA", icon: "✦", description: "Simule conversas" },
   { id: "timing", label: "Timing", icon: "◷", description: "Quando agir" },
   { id: "messages", label: "Mensagem rápida", icon: "✎", description: "Planeje e copie" },
@@ -2279,11 +2278,6 @@ export default function Home() {
     setMetrics((current) => ({ ...current, [key]: Number.isFinite(numeric) ? numeric : 0 }));
   }
 
-  function updateFactoryItem(id: string, key: FactoryField, value: string) {
-    if (key === "manufacturer") return;
-    setFactoryItems((current) => current.map((item) => item.id === id ? { ...item, [key]: value } : item));
-  }
-
   function updateFactoryWizard(key: FactoryWizardField, value: string) {
     setFactoryWizardDraft((current) => ({ ...current, [key]: value }));
   }
@@ -2334,7 +2328,7 @@ export default function Home() {
   function clearFactoryItems() {
     if (!window.confirm("Limpar os itens da requisição? As linhas já enviadas serão removidas deste navegador.")) return;
     setFactoryItems([]);
-    showToast("Requisição limpa; nenhuma linha vazia foi criada");
+    showToast("Itens enviados removidos");
   }
 
   async function exportFactoryToExcel() {
@@ -2537,6 +2531,20 @@ export default function Home() {
           </div>
         )}
 
+        {section === "seller" && (
+          <div className="page-content">
+            <div className="section-intro seller-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> DESENVOLVIMENTO DO FUNCIONÁRIO</span><h1>Ser um bom vendedor<br /><em>é conduzir bem.</em></h1><p>Venda não é falar mais. É entender o cliente, organizar a solução e deixar claro qual é o próximo passo.</p></div><div className="seller-score"><strong>06</strong><span>hábitos para praticar</span><small>um atendimento por vez</small></div></div>
+
+            <section className="seller-hero panel"><div><span className="section-kicker">A REGRA PRINCIPAL</span><h2>Antes de oferecer, entenda.</h2><p>O cliente não procura apenas uma porta ou uma janela. Ele procura segurança para escolher certo, evitar retrabalho e fazer a obra avançar.</p></div><div className="seller-hero-quote">“Quem pergunta melhor, indica melhor.”</div></section>
+
+            <section className="seller-pillars"><article><span>01</span><h3>Ouça de verdade</h3><p>Não interrompa. Anote ambiente, medida, objetivo, quantidade e prazo.</p><strong>Pratique:</strong><small>repita o que entendeu antes de apresentar.</small></article><article><span>02</span><h3>Faça perguntas</h3><p>Perguntas evitam indicação errada e mostram que você está cuidando da compra.</p><strong>Pratique:</strong><small>faça pelo menos três perguntas antes do preço.</small></article><article><span>03</span><h3>Explique com clareza</h3><p>Troque termos difíceis por benefícios que o cliente consegue visualizar.</p><strong>Pratique:</strong><small>fale uma ideia por vez e confirme se ficou claro.</small></article><article><span>04</span><h3>Seja preciso</h3><p>Não invente medida, valor, estoque, garantia ou prazo. Use “A confirmar” quando necessário.</p><strong>Pratique:</strong><small>confirme a informação antes de prometer.</small></article><article><span>05</span><h3>Defenda valor</h3><p>Preço faz sentido quando o cliente entende o que está incluso e por que a opção atende.</p><strong>Pratique:</strong><small>compare solução, acabamento, qualidade e pós-venda.</small></article><article><span>06</span><h3>Conduza o próximo passo</h3><p>Todo atendimento precisa terminar com uma ação: medida, escolha, retorno ou fechamento.</p><strong>Pratique:</strong><small>combine quem fará o quê e quando.</small></article></section>
+
+            <div className="seller-practice-grid"><section className="panel seller-routine"><div className="panel-heading"><div><span className="section-kicker">ROTINA DE 10 MINUTOS</span><h2>Treino diário do vendedor</h2></div><span className="seller-routine-badge">TODOS OS DIAS</span></div><div className="seller-routine-list"><div><b>02 min</b><span>Leia um produto e explique em voz alta para qual ambiente ele serve.</span></div><div><b>03 min</b><span>Treine uma abertura: cumprimente, pergunte e confirme a necessidade.</span></div><div><b>03 min</b><span>Responda a uma objeção sem discutir: acolha, explique e devolva uma pergunta.</span></div><div><b>02 min</b><span>Revise um atendimento e registre o que faltou para o próximo passo.</span></div></div><button className="button dark" onClick={() => navigate("training")}>Praticar no treino de conversa <span>✦</span></button></section><section className="panel seller-language"><span className="section-kicker">FRASES QUE AJUDAM</span><h2>Fale como consultor.</h2><div className="seller-phrase"><span>ABERTURA</span><p>“Para eu te indicar a opção certa, posso entender primeiro o ambiente e as medidas?”</p><button className="copy-button" onClick={() => copyMessage("Para eu te indicar a opção certa, posso entender primeiro o ambiente e as medidas?")}>Copiar frase <span>⧉</span></button></div><div className="seller-phrase"><span>OBJEÇÃO DE PREÇO</span><p>“Entendo. Vamos comparar o que está incluso para você ver qual opção realmente atende melhor.”</p><button className="copy-button" onClick={() => copyMessage("Entendo. Vamos comparar o que está incluso para você ver qual opção realmente atende melhor.")}>Copiar frase <span>⧉</span></button></div><div className="seller-phrase"><span>FECHAMENTO</span><p>“Se essa opção atende ao que você precisa, o próximo passo é confirmarmos a medida e a cor, certo?”</p><button className="copy-button" onClick={() => copyMessage("Se essa opção atende ao que você precisa, o próximo passo é confirmarmos a medida e a cor, certo?")}>Copiar frase <span>⧉</span></button></div></section></div>
+
+            <section className="seller-avoid panel"><div className="seller-avoid-head"><span className="section-kicker">CHECKLIST ANTES DE ENVIAR O ORÇAMENTO</span><h2>Um bom atendimento deixa o cliente seguro.</h2></div><div className="seller-checks"><span>✓ Eu entendi o ambiente e o objetivo.</span><span>✓ Confirmei medidas, abertura e quantidade.</span><span>✓ Expliquei o que está incluso.</span><span>✓ Mantive valores e prazos exatamente como confirmados.</span><span>✓ Combinei o próximo passo e o momento do retorno.</span></div><button className="button primary" onClick={() => navigate("script")}>Abrir roteiro completo <span>→</span></button></section>
+          </div>
+        )}
+
         {section === "training" && (
           <div className="page-content">
             <div className="section-intro training-intro">
@@ -2645,13 +2653,13 @@ export default function Home() {
             <section className="panel factory-workspace">
               <div className="factory-toolbar">
                 <div>
-                  <span className="section-kicker">TABELA DE REQUISIÇÃO</span>
+                  <span className="section-kicker">REQUISIÇÃO TÉCNICA</span>
                   <h2>Produtos para consultar ou requisitar</h2>
-                  <p>Planilha exclusiva Dalcomad: monte cada porta por etapas e revise as 11 colunas somente depois que o orçamento for enviado.</p>
+                  <p>Planilha exclusiva Dalcomad: monte cada porta por etapas e exporte os itens quando a consulta estiver pronta.</p>
                 </div>
                 <div className="factory-actions">
                   <button className="button primary" type="button" onClick={exportFactoryToExcel}>Exportar Excel <span>↓</span></button>
-                  <button className="text-button danger-text" type="button" onClick={clearFactoryItems}>Limpar tabela <span>×</span></button>
+                  <button className="text-button danger-text" type="button" onClick={clearFactoryItems}>Limpar itens <span>×</span></button>
                 </div>
               </div>
 
@@ -2687,40 +2695,16 @@ export default function Home() {
                 <div className="factory-locator-actions"><button className="text-button" type="button" onClick={resetFactoryWizard}>Limpar localizador</button><div><button className="button light" type="button" onClick={goToPreviousFactoryWizardStep} disabled={factoryWizardStep === 0}>← Voltar</button>{factoryWizardStep < factoryWizardSteps.length - 1 ? <button className="button dark" type="button" onClick={goToNextFactoryWizardStep}>Próxima etapa <span>→</span></button> : <button className="button primary" type="button" onClick={addFactoryWizardItem}>Enviar orçamento para Dalcomad <span>↗</span></button>}</div></div>
               </section>
 
-              <div className="factory-table-meta"><span><b>{filledFactoryItems.length}</b> enviadas</span><span><b>{filledFactoryItems.length === 0 ? "—" : "1 linha por item"}</b></span><span className="factory-meta-note">Nenhuma linha vazia é criada. Cor, linha e acabamento são independentes em cada item.</span></div>
+              <div className="factory-submission-note" role="status" aria-live="polite">
+                <span><b>{filledFactoryItems.length}</b> {filledFactoryItems.length === 1 ? "item preparado" : "itens preparados"}</span>
+                <span>Os itens ficam salvos neste navegador e podem ser exportados para Excel quando a consulta estiver pronta.</span>
+              </div>
 
-              {filledFactoryItems.length === 0 ? <div className="empty-state factory-empty-state">A tabela está vazia. Monte uma porta no localizador e clique em <strong>Enviar orçamento para Dalcomad</strong> para criar a primeira linha.</div> : <div className="factory-table-scroll">
-                <table className="factory-table" aria-label="Tabela técnica de requisição para fábrica">
-                  <caption className="table-caption">Uma linha por produto, com características técnicas e valores de consulta. O fabricante é fixo; cor, linha e acabamento ficam por item.</caption>
-                  <thead><tr>{factoryHeaders.map((header) => <th key={header} scope="col">{header}</th>)}</tr></thead>
-                  <tbody>
-                    {filledFactoryItems.map((item, rowIndex) => (
-                      <tr key={item.id} className={hasFactoryContent(item) ? "filled" : ""}>
-                        <td data-label="Fabricante"><span className="factory-fixed-cell">DALCOMAD</span></td>
-                        {factoryEditableFieldConfig.map(({ key, label, placeholder, listId }) => (
-                          <td key={key} data-label={label}>
-                            {key === "color" ? <select className="factory-cell-input factory-cell-select" value={item.color} onChange={(event) => updateFactoryItem(item.id, "color", event.target.value)} aria-label={`${label}, linha ${rowIndex + 1}`}><option value="">—</option>{factoryListOptions.colors.map((option) => <option key={option} value={option}>{option}</option>)}<option value="A confirmar">A confirmar</option></select> : <input
-                              className={key === "priceWithoutLock" || key === "priceWithLock" ? "factory-cell-input money" : "factory-cell-input"}
-                              value={item[key]}
-                              onChange={(event) => updateFactoryItem(item.id, key, event.target.value)}
-                              placeholder={placeholder}
-                              aria-label={`${label}, linha ${rowIndex + 1}`}
-                              list={listId}
-                              inputMode={key === "leafMeasure" || key === "priceWithoutLock" || key === "priceWithLock" ? "decimal" : "text"}
-                            />}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>}
-
-              <div className="factory-bottom-bar" role="status" aria-live="polite"><span>✓ Salvo automaticamente neste navegador</span><span>→ Exporte somente depois de revisar fabricante, abertura, medida e requadro.</span></div>
+              <div className="factory-bottom-bar" role="status" aria-live="polite"><span>✓ Salvo automaticamente neste navegador</span><span>→ Exporte o arquivo depois de finalizar o localizador.</span></div>
             </section>
 
             <section className="factory-notes-grid">
-              <article className="panel factory-note-card"><span className="section-kicker">COMO USAR</span><h2>Envie uma porta por vez.</h2><p>Monte a porta no localizador e envie o orçamento para criar uma única linha. Depois, se necessário, revise os dados técnicos diretamente nessa linha.</p><div className="factory-note-list"><span>✓ Medida da folha e requadro</span><span>✓ Modelo de abertura</span><span>✓ Cor por item</span><span>✓ Acabamento por item</span></div></article>
+              <article className="panel factory-note-card"><span className="section-kicker">COMO USAR</span><h2>Envie uma porta por vez.</h2><p>Monte a porta no localizador, confira a prévia e envie o orçamento para preparar a consulta. Se precisar mudar algo, ajuste as etapas antes de enviar.</p><div className="factory-note-list"><span>✓ Medida da folha e requadro</span><span>✓ Modelo de abertura</span><span>✓ Cor por item</span><span>✓ Acabamento por item</span></div></article>
               <article className="panel factory-note-card accent"><span className="section-kicker">ANTES DE ENCAMINHAR</span><h2>Não misture consulta e venda.</h2><p>Este arquivo é uma requisição técnica para a fábrica. Não inclui desconto, parcelas, validade ou promessa de estoque e prazo.</p><button className="button dark" type="button" onClick={() => navigate("messages")}>Voltar para mensagem comercial <span>→</span></button></article>
             </section>
 
