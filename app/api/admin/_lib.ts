@@ -17,6 +17,17 @@ export function isOwnerRequest(request: Request) {
   return (request.headers.get("oai-authenticated-user-email") ?? "").trim().toLocaleLowerCase("pt-BR") === OWNER_EMAIL;
 }
 
+const ADMIN_ORIGINS = new Set([
+  "https://icaroluciano13-dot.github.io",
+  "https://guia-comercial-mult-portas.eletrovale-cont.chatgpt.site",
+]);
+
+export function isAdminRequest(request: Request) {
+  if (isOwnerRequest(request)) return true;
+  const origin = request.headers.get("origin");
+  return origin ? ADMIN_ORIGINS.has(origin) : false;
+}
+
 export function adminSessionCookie(request: Request, token: string, maxAge = ADMIN_SESSION_MAX_AGE) {
   const secureRequest = new URL(request.url).protocol === "https:";
   const origin = request.headers.get("origin");
@@ -48,7 +59,7 @@ export async function createAdminSession(request: Request) {
 }
 
 export async function getAdminSession(request: Request) {
-  if (!isOwnerRequest(request)) return false;
+  if (!isAdminRequest(request)) return false;
   const token = getCookie(request, ADMIN_COOKIE);
   if (!token) return false;
 

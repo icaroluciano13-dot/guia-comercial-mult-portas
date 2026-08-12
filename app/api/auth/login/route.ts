@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { employeeUsers } from "../../../../db/schema";
-import { ADMIN_PASSWORD, ADMIN_USERNAME, createAdminSession, isOwnerRequest } from "../../admin/_lib";
+import { ADMIN_PASSWORD, ADMIN_USERNAME, createAdminSession, isAdminRequest } from "../../admin/_lib";
 import {
   createSession,
   normalizeUsername,
@@ -35,7 +35,7 @@ async function handleLogin(request: Request) {
   if (!username || !password) return Response.json({ error: "Informe usuário e senha." }, { status: 400 });
 
   if (username.toLocaleLowerCase("pt-BR") === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-    if (!isOwnerRequest(request)) return Response.json({ error: "Usuário ou senha incorretos." }, { status: 401 });
+    if (!isAdminRequest(request)) return Response.json({ error: "Usuário ou senha incorretos." }, { status: 401 });
     const session = await createAdminSession(request);
     return Response.json({ admin: true }, { headers: { "Set-Cookie": session.cookie, "Cache-Control": "no-store" } });
   }

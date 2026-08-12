@@ -94,3 +94,30 @@ test("cross-origin logout remains JSON and sets cross-site cookies", async () =>
   assert.match(response.headers.get("set-cookie") ?? "", /SameSite=None/);
   assert.deepEqual(JSON.parse(await response.text()), { ok: true });
 });
+
+test("admin policy explicitly allows GitHub Pages and keeps the password server-side", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../app/api/admin/_lib.ts", import.meta.url), "utf8");
+  assert.match(source, /https:\/\/icaroluciano13-dot\.github\.io/);
+  assert.match(source, /ADMIN_PASSWORD\s*=\s*runtimeEnv\.ADMIN_PASSWORD/);
+  assert.match(source, /export function isAdminRequest/);
+});
+
+test("admin login rejects an unapproved web origin", async () => {
+  const worker = await loadWorker();
+  const response = await worker.fetch(
+    new Request("https://guia-comercial-mult-portas.eletrovale-cont.chatgpt.site/api/auth/login", {
+      method: "POST",
+      headers: {
+        Origin: "https://example.invalid",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ username: "admin", password: "admin" }),
+    }),
+    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
+    executionContext(),
+  );
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(JSON.parse(await response.text()), { error: "Usuário ou senha incorretos." });
+});
