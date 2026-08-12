@@ -10,6 +10,35 @@ type TrainingFilter = "Todos" | TrainingLevel;
 type QuickMessageChannel = "WhatsApp" | "Áudio";
 type QuickMessageTone = "Consultivo" | "Direto" | "Próximo";
 
+type EmployeeUser = {
+  id: number;
+  username: string;
+  displayName: string;
+  branch: "Araraquara" | "São Carlos";
+};
+
+type AuthMode = "login" | "register";
+
+type AuthFormState = {
+  displayName: string;
+  username: string;
+  branch: EmployeeUser["branch"];
+  password: string;
+  confirmPassword: string;
+};
+
+type PersistedGuideState = {
+  sales?: unknown;
+  timing?: unknown;
+  followups?: unknown;
+  checks?: unknown;
+  metrics?: unknown;
+  training?: unknown;
+  messages?: unknown;
+  factory?: unknown;
+  drawerChecks?: unknown;
+};
+
 type TrainingStats = {
   rounds: number;
   best: number;
@@ -268,6 +297,69 @@ const STORAGE = {
   messages: "mult-portas-guia-messages-v1",
   factory: "mult-portas-guia-factory-v1",
 };
+
+const LEGACY_MIGRATION_KEY = "mult-portas-guia-legacy-migrated-v1";
+
+function scopedStorageKey(userId: number, key: string) {
+  return `mult-portas-guia-user-${userId}-${key}`;
+}
+
+function safelyParseJson(value: string | null): unknown {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+async function readResponseJson<T>(response: Response): Promise<T> {
+  const raw = await response.text();
+  if (!raw.trim()) throw new Error("O servidor não respondeu. Tente novamente.");
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new Error("O servidor enviou uma resposta inválida. Tente novamente.");
+  }
+}
+
+function readScopedLocalState(userId: number): PersistedGuideState | null {
+  if (typeof window === "undefined") return null;
+  const state: PersistedGuideState = {};
+  let hasScopedState = false;
+  for (const key of Object.keys(STORAGE) as (keyof typeof STORAGE)[]) {
+    const value = localStorage.getItem(scopedStorageKey(userId, STORAGE[key]));
+    if (value !== null) {
+      state[key] = safelyParseJson(value);
+      hasScopedState = true;
+    }
+  }
+  const drawerChecks = localStorage.getItem(scopedStorageKey(userId, "drawer-checks-v1"));
+  if (drawerChecks !== null) {
+    state.drawerChecks = safelyParseJson(drawerChecks);
+    hasScopedState = true;
+  }
+  if (hasScopedState) return state;
+
+  // A version that existed before employee accounts used global browser keys.
+  // Migrate those keys only once to the first account that signs in on this device.
+  if (!localStorage.getItem(LEGACY_MIGRATION_KEY)) {
+    let migrated = false;
+    for (const key of Object.keys(STORAGE) as (keyof typeof STORAGE)[]) {
+      const legacyValue = localStorage.getItem(STORAGE[key]);
+      if (legacyValue !== null) {
+        localStorage.setItem(scopedStorageKey(userId, STORAGE[key]), legacyValue);
+        localStorage.removeItem(STORAGE[key]);
+        state[key] = safelyParseJson(legacyValue);
+        migrated = true;
+      }
+    }
+    localStorage.setItem(LEGACY_MIGRATION_KEY, "1");
+    if (migrated) return state;
+  }
+
+  return null;
+}
 
 const sections: { id: Section; label: string; icon: string; description: string }[] = [
   { id: "overview", label: "Visão geral", icon: "⌂", description: "Comando do dia" },
@@ -1748,7 +1840,250 @@ function guidedCoach(scenario: TrainingScenario, sellerMessage: string, turn: nu
   };
 }
 
+function AuthScreen({
+  mode,
+  setMode,
+  form,
+  setForm,
+  error,
+  busy,
+  onSubmit,
+}: {
+  mode: AuthMode;
+  setMode: (mode: AuthMode) => void;
+  form: AuthFormState;
+  setForm: React.Dispatch<React.SetStateAction<AuthFormState>>;
+  error: string;
+  busy: boolean;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const isRegister = mode === "register";
+  const update = (key: keyof AuthFormState, value: string) => setForm((current) => ({ ...current, [key]: value }));
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-card" aria-labelledby="auth-title">
+        <div className="auth-brand">
+          <div className="brand-mark auth-mark">MP</div>
+          <div>
+            <strong>MULT PORTAS</strong>
+            <span>Guia comercial interno</span>
+          </div>
+        </div>
+        <div className="auth-heading">
+          <span className="section-kicker">ACESSO DOS FUNCIONÁRIOS</span>
+          <h1 id="auth-title">{isRegister ? "Crie seu acesso." : "Entre no seu espaço."}</h1>
+          <p>{isRegister ? "Cada funcionário terá seus próprios registros, pendências e progresso." : "Use seu usuário e senha para abrir os dados da sua conta."}</p>
+        </div>
+
+        <div className="auth-tabs" role="tablist" aria-label="Acesso e cadastro">
+          <button type="button" role="tab" aria-selected={!isRegister} className={!isRegister ? "active" : ""} onClick={() => { setMode("login"); }}>
+            Entrar
+          </button>
+          <button type="button" role="tab" aria-selected={isRegister} className={isRegister ? "active" : ""} onClick={() => { setMode("register"); }}>
+            Cadastro
+          </button>
+        </div>
+
+        <form className="auth-form" onSubmit={onSubmit}>
+          {isRegister && (
+            <label>
+              <span>Nome completo</span>
+              <input value={form.displayName} onChange={(event) => update("displayName", event.target.value)} placeholder="Nome do funcionário" autoComplete="name" required />
+            </label>
+          )}
+          <label>
+            <span>Usuário</span>
+            <input value={form.username} onChange={(event) => update("username", event.target.value)} placeholder="ex.: nome.sobrenome" autoComplete="username" required />
+          </label>
+          {isRegister && (
+            <label>
+              <span>Filial</span>
+              <select value={form.branch} onChange={(event) => update("branch", event.target.value)}>
+                <option value="Araraquara">Araraquara</option>
+                <option value="São Carlos">São Carlos</option>
+              </select>
+            </label>
+          )}
+          <label>
+            <span>Senha</span>
+            <input type="password" value={form.password} onChange={(event) => update("password", event.target.value)} placeholder="Mínimo de 6 caracteres" autoComplete={isRegister ? "new-password" : "current-password"} required />
+          </label>
+          {isRegister && (
+            <label>
+              <span>Confirmar senha</span>
+              <input type="password" value={form.confirmPassword} onChange={(event) => update("confirmPassword", event.target.value)} placeholder="Repita a senha" autoComplete="new-password" required />
+            </label>
+          )}
+          {error && <div className="auth-error" role="alert">{error}</div>}
+          <button className="button primary auth-submit" type="submit" disabled={busy}>
+            {busy ? "Aguarde…" : isRegister ? "Criar cadastro" : "Entrar no guia"}
+            {!busy && <span>→</span>}
+          </button>
+        </form>
+
+        <div className="auth-note"><span>✓</span><p>Ao sair, somente a sessão deste guia será encerrada. O acesso ao restante da plataforma permanece como está.</p></div>
+      </section>
+    </main>
+  );
+}
+
+type AccountRecord = EmployeeUser & {
+  createdAt: string;
+  dataUpdatedAt: string | null;
+};
+
+function formatAccountDate(value: string | null) {
+  if (!value) return "Ainda não usado";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(date);
+}
+
+function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
+  const [accounts, setAccounts] = useState<AccountRecord[]>([]);
+  const [selectedAccount, setSelectedAccount] = useState<AccountRecord | null>(null);
+  const [selectedState, setSelectedState] = useState<PersistedGuideState | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function loadAccounts() {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/admin/users", { cache: "no-store" });
+      const payload = await readResponseJson<{ users?: AccountRecord[]; error?: string }>(response);
+      if (!response.ok) throw new Error(payload.error || "Não foi possível carregar as contas.");
+      setAccounts(Array.isArray(payload.users) ? payload.users : []);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Não foi possível carregar as contas.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadAccounts(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  async function openAccount(account: AccountRecord) {
+    setSelectedAccount(account);
+    setSelectedState(null);
+    setDetailsLoading(true);
+    try {
+      const response = await fetch(`/api/admin/users/${account.id}`, { cache: "no-store" });
+      const payload = await readResponseJson<{ user?: AccountRecord; state?: PersistedGuideState | null; error?: string }>(response);
+      if (!response.ok || !payload.user) throw new Error(payload.error || "Não foi possível abrir os dados da conta.");
+      setSelectedAccount(payload.user);
+      setSelectedState(payload.state && typeof payload.state === "object" ? payload.state : null);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Não foi possível abrir os dados da conta.");
+    } finally {
+      setDetailsLoading(false);
+    }
+  }
+
+  const stateEntries = selectedState ? Object.entries(selectedState).filter(([, value]) => value !== undefined && value !== null) : [];
+
+  return (
+    <main className="account-shell">
+      <section className="account-card" aria-labelledby="accounts-title">
+        <header className="account-header">
+          <div className="auth-brand">
+            <div className="brand-mark auth-mark">MP</div>
+            <div>
+              <strong>MULT PORTAS</strong>
+              <span>Guia comercial interno</span>
+            </div>
+          </div>
+          <div className="account-actions">
+            <button className="button ghost" type="button" onClick={() => void loadAccounts()} disabled={loading}>Atualizar</button>
+            <button className="logout-button account-logout" type="button" onClick={() => void onLogout()}>Sair</button>
+          </div>
+        </header>
+
+        <div className="account-heading">
+          <span className="section-kicker">CONTAS CADASTRADAS</span>
+          <h1 id="accounts-title">Acessos salvos.</h1>
+          <p>Consulte os funcionários e abra os registros gravados em cada conta.</p>
+        </div>
+
+        {error && <div className="auth-error" role="alert">{error}</div>}
+
+        {loading ? (
+          <div className="account-empty" aria-live="polite">Carregando contas…</div>
+        ) : accounts.length === 0 ? (
+          <div className="account-empty">Nenhuma conta cadastrada.</div>
+        ) : (
+          <div className="account-list">
+            {accounts.map((account) => (
+              <article className={`account-row ${selectedAccount?.id === account.id ? "selected" : ""}`} key={account.id}>
+                <div className="account-avatar">{account.displayName.slice(0, 1).toUpperCase()}</div>
+                <div className="account-main">
+                  <strong>{account.displayName}</strong>
+                  <span>{account.username} · {account.branch}</span>
+                </div>
+                <div className="account-meta">
+                  <small>Cadastro</small>
+                  <span>{formatAccountDate(account.createdAt)}</span>
+                </div>
+                <div className="account-meta">
+                  <small>Registros</small>
+                  <span>{account.dataUpdatedAt ? formatAccountDate(account.dataUpdatedAt) : "Sem dados"}</span>
+                </div>
+                <button className="account-open" type="button" onClick={() => void openAccount(account)}>{selectedAccount?.id === account.id ? "Atualizar" : "Abrir dados"} <span>→</span></button>
+              </article>
+            ))}
+          </div>
+        )}
+
+        {selectedAccount && (
+          <section className="account-detail" aria-live="polite">
+            <div className="account-detail-head">
+              <div>
+                <span className="section-kicker">REGISTROS DA CONTA</span>
+                <h2>{selectedAccount.displayName}</h2>
+                <p>{selectedAccount.username} · {selectedAccount.branch}</p>
+              </div>
+              <button className="text-button" type="button" onClick={() => { setSelectedAccount(null); setSelectedState(null); }}>Fechar <span>×</span></button>
+            </div>
+            {detailsLoading ? (
+              <div className="account-empty">Abrindo registros…</div>
+            ) : stateEntries.length === 0 ? (
+              <div className="account-empty">Esta conta ainda não possui registros salvos.</div>
+            ) : (
+              <div className="account-state-grid">
+                {stateEntries.map(([key, value]) => (
+                  <article key={key}>
+                    <span>{key}</span>
+                    <pre>{JSON.stringify(value, null, 2)}</pre>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+      </section>
+    </main>
+  );
+}
+
 export default function Home() {
+  const [authUser, setAuthUser] = useState<EmployeeUser | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authForm, setAuthForm] = useState<AuthFormState>({
+    displayName: "",
+    username: "",
+    branch: "Araraquara",
+    password: "",
+    confirmPassword: "",
+  });
+  const [authError, setAuthError] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
   const [section, setSection] = useState<Section>("overview");
   const [activeSalesStep, setActiveSalesStep] = useState(0);
   const [activeTrainingScenario, setActiveTrainingScenario] = useState(0);
@@ -1798,6 +2133,7 @@ export default function Home() {
   const [filterStatus, setFilterStatus] = useState("Todos");
   const [toast, setToast] = useState("");
   const [hydrated, setHydrated] = useState(false);
+  const [dataLoaded, setDataLoaded] = useState(false);
   const [today, setToday] = useState("30 JUL 2026");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -1807,67 +2143,104 @@ export default function Home() {
   const voiceUrlsRef = useRef<string[]>([]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
+    let cancelled = false;
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then(async (response) => response.ok ? await readResponseJson<{ user?: EmployeeUser | null; admin?: boolean }>(response) : { user: null, admin: false })
+      .then((data) => {
+        if (cancelled) return;
+        setIsAdmin(data.admin === true);
+        setAuthUser(data.user && typeof data.user.id === "number" ? data.user : null);
+        setAuthLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) setAuthLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!authUser) return;
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      let state: PersistedGuideState | null = null;
       try {
-        const savedSales = JSON.parse(localStorage.getItem(STORAGE.sales) || "[]");
-        const savedTiming = JSON.parse(localStorage.getItem(STORAGE.timing) || "[]");
-        const savedFollowUps = JSON.parse(localStorage.getItem(STORAGE.followups) || "null");
-        const savedChecks = JSON.parse(localStorage.getItem(STORAGE.checks) || "[]");
-        const savedMetrics = JSON.parse(localStorage.getItem(STORAGE.metrics) || "null");
-        const savedTraining = JSON.parse(localStorage.getItem(STORAGE.training) || "null");
-        const savedMessages = JSON.parse(localStorage.getItem(STORAGE.messages) || "null");
-        const savedFactory = JSON.parse(localStorage.getItem(STORAGE.factory) || "null");
-        if (Array.isArray(savedSales)) setDoneSales(savedSales);
-        if (Array.isArray(savedTiming)) setDoneTiming(savedTiming);
-        if (Array.isArray(savedFollowUps)) setFollowUps(savedFollowUps);
-        if (Array.isArray(savedChecks)) setDailyDone(savedChecks);
-        if (savedMetrics && typeof savedMetrics === "object") setMetrics({ ...defaultMetrics, ...savedMetrics });
-        if (savedTraining && typeof savedTraining === "object") {
-          const training = savedTraining as { rounds?: unknown; sessions?: unknown; best?: unknown; scenarios?: unknown };
-          setTrainingStats({
-            rounds: Number(training.rounds ?? training.sessions) || 0,
-            best: Number(training.best) || 0,
-            scenarios: Array.isArray(training.scenarios) ? training.scenarios.filter((item): item is string => typeof item === "string") : [],
-          });
-        }
-        if (savedFactory) {
-          const factory = normalizeFactoryState(savedFactory);
-          if (factory.length > 0) setFactoryItems(factory);
-        }
-        if (savedMessages && typeof savedMessages === "object") {
-          const planner = savedMessages as Partial<{
-            name: string;
-            line: string;
-            environment: string;
-            objective: string;
-            question: string;
-            channel: QuickMessageChannel;
-            tone: QuickMessageTone;
-            proof: { company?: boolean; quality?: boolean; guarantee?: boolean };
-          }>;
-          if (typeof planner.name === "string") setMessageName(planner.name);
-          if (typeof planner.line === "string") setMessageLine(planner.line);
-          if (typeof planner.environment === "string") setMessageEnvironment(planner.environment);
-          if (typeof planner.objective === "string") setMessageObjective(planner.objective);
-          if (typeof planner.question === "string") setMessageQuestion(planner.question);
-          if (planner.channel === "WhatsApp" || planner.channel === "Áudio") setMessageChannel(planner.channel);
-          if (planner.tone === "Consultivo" || planner.tone === "Direto" || planner.tone === "Próximo") setMessageTone(planner.tone);
-          if (planner.proof && typeof planner.proof === "object") {
-            setMessageProof({
-              company: planner.proof.company !== false,
-              quality: planner.proof.quality !== false,
-              guarantee: planner.proof.guarantee !== false,
-            });
+        const response = await fetch("/api/data", { cache: "no-store" });
+        if (response.ok) {
+          const payload = await readResponseJson<{ state?: unknown }>(response);
+          if (payload.state && typeof payload.state === "object" && !Array.isArray(payload.state)) {
+            state = payload.state as PersistedGuideState;
           }
         }
       } catch {
-        // Local browser data is optional; the guide remains usable without it.
+        // The browser-scoped copy below keeps the guide usable during a temporary connection issue.
+      }
+      if (!state) state = readScopedLocalState(authUser.id);
+      if (cancelled) return;
+
+      const savedSales = Array.isArray(state?.sales) ? state.sales : [];
+      const savedTiming = Array.isArray(state?.timing) ? state.timing : [];
+      const savedFollowUps = Array.isArray(state?.followups) ? state.followups : null;
+      const savedChecks = Array.isArray(state?.checks) ? state.checks : [];
+      const savedMetrics = state?.metrics;
+      const savedTraining = state?.training;
+      const savedMessages = state?.messages;
+      const savedFactory = state?.factory;
+      const savedDrawerChecks = state?.drawerChecks;
+
+      setDoneSales(savedSales.filter((item): item is string => typeof item === "string"));
+      setDoneTiming(savedTiming.filter((item): item is string => typeof item === "string"));
+      if (savedFollowUps) setFollowUps(savedFollowUps as LocalFollowUp[]);
+      setDailyDone(savedChecks.filter((item): item is string => typeof item === "string"));
+      if (savedMetrics && typeof savedMetrics === "object") setMetrics({ ...defaultMetrics, ...savedMetrics as typeof defaultMetrics });
+      if (savedTraining && typeof savedTraining === "object") {
+        const training = savedTraining as { rounds?: unknown; sessions?: unknown; best?: unknown; scenarios?: unknown };
+        setTrainingStats({
+          rounds: Number(training.rounds ?? training.sessions) || 0,
+          best: Number(training.best) || 0,
+          scenarios: Array.isArray(training.scenarios) ? training.scenarios.filter((item): item is string => typeof item === "string") : [],
+        });
+      }
+      if (savedFactory) {
+        const factory = normalizeFactoryState(savedFactory);
+        setFactoryItems(factory);
+      }
+      if (savedDrawerChecks && typeof savedDrawerChecks === "object") setDrawerChecks(savedDrawerChecks as Record<string, string[]>);
+      if (savedMessages && typeof savedMessages === "object") {
+        const planner = savedMessages as Partial<{
+          name: string;
+          line: string;
+          environment: string;
+          objective: string;
+          question: string;
+          channel: QuickMessageChannel;
+          tone: QuickMessageTone;
+          proof: { company?: boolean; quality?: boolean; guarantee?: boolean };
+        }>;
+        if (typeof planner.name === "string") setMessageName(planner.name);
+        if (typeof planner.line === "string") setMessageLine(planner.line);
+        if (typeof planner.environment === "string") setMessageEnvironment(planner.environment);
+        if (typeof planner.objective === "string") setMessageObjective(planner.objective);
+        if (typeof planner.question === "string") setMessageQuestion(planner.question);
+        if (planner.channel === "WhatsApp" || planner.channel === "Áudio") setMessageChannel(planner.channel);
+        if (planner.tone === "Consultivo" || planner.tone === "Direto" || planner.tone === "Próximo") setMessageTone(planner.tone);
+        if (planner.proof && typeof planner.proof === "object") {
+          setMessageProof({
+            company: planner.proof.company !== false,
+            quality: planner.proof.quality !== false,
+            guarantee: planner.proof.guarantee !== false,
+          });
+        }
       }
       setToday(formatToday());
+      setDataLoaded(true);
       setHydrated(true);
     }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [authUser]);
 
   useEffect(() => {
     const browserWindow = window as typeof window & {
@@ -1898,15 +2271,17 @@ export default function Home() {
   }, [isRecording]);
 
   useEffect(() => {
-    if (!hydrated) return;
-    localStorage.setItem(STORAGE.sales, JSON.stringify(doneSales));
-    localStorage.setItem(STORAGE.timing, JSON.stringify(doneTiming));
-    localStorage.setItem(STORAGE.followups, JSON.stringify(followUps));
-    localStorage.setItem(STORAGE.checks, JSON.stringify(dailyDone));
-    localStorage.setItem(STORAGE.metrics, JSON.stringify(metrics));
-    localStorage.setItem(STORAGE.training, JSON.stringify(trainingStats));
-    localStorage.setItem(STORAGE.factory, JSON.stringify(factoryItems.map((item) => ({ ...item, manufacturer: "DALCOMAD" }))));
-    localStorage.setItem(STORAGE.messages, JSON.stringify({
+    if (!authUser || !hydrated || !dataLoaded) return;
+    const state: PersistedGuideState = {
+      sales: doneSales,
+      timing: doneTiming,
+      followups: followUps,
+      checks: dailyDone,
+      metrics,
+      training: trainingStats,
+      factory: factoryItems.map((item) => ({ ...item, manufacturer: "DALCOMAD" })),
+      drawerChecks,
+      messages: {
       name: messageName,
       line: messageLine,
       environment: messageEnvironment,
@@ -1915,8 +2290,33 @@ export default function Home() {
       channel: messageChannel,
       tone: messageTone,
       proof: messageProof,
-    }));
-  }, [dailyDone, doneSales, doneTiming, factoryItems, followUps, hydrated, messageChannel, messageEnvironment, messageLine, messageName, messageObjective, messageProof, messageQuestion, messageTone, metrics, trainingStats]);
+      },
+    };
+
+    const localEntries: [keyof typeof STORAGE, unknown][] = [
+      ["sales", state.sales],
+      ["timing", state.timing],
+      ["followups", state.followups],
+      ["checks", state.checks],
+      ["metrics", state.metrics],
+      ["training", state.training],
+      ["messages", state.messages],
+      ["factory", state.factory],
+    ];
+    for (const [key, value] of localEntries) localStorage.setItem(scopedStorageKey(authUser.id, STORAGE[key]), JSON.stringify(value));
+    localStorage.setItem(scopedStorageKey(authUser.id, "drawer-checks-v1"), JSON.stringify(drawerChecks));
+
+    const timer = window.setTimeout(() => {
+      fetch("/api/data", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state }),
+      }).catch(() => {
+        // The namespaced browser copy remains available if the connection is interrupted.
+      });
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [authUser, dailyDone, dataLoaded, doneSales, doneTiming, drawerChecks, factoryItems, followUps, hydrated, messageChannel, messageEnvironment, messageLine, messageName, messageObjective, messageProof, messageQuestion, messageTone, metrics, trainingStats]);
 
   useEffect(() => {
     if (!selectedCatalog) return;
@@ -1983,6 +2383,80 @@ export default function Home() {
   function showToast(message: string) {
     setToast(message);
     window.setTimeout(() => setToast(""), 2600);
+  }
+
+  function resetEmployeeWorkspace() {
+    setDoneSales([]);
+    setDoneTiming([]);
+    setFollowUps(defaultFollowUps);
+    setDailyDone([]);
+    setMetrics(defaultMetrics);
+    setTrainingStats({ rounds: 0, best: 0, scenarios: [] });
+    setFactoryItems(defaultFactoryItems);
+    setDrawerChecks({});
+    setMessageName("");
+    setMessageLine("Kit porta pronta");
+    setMessageEnvironment("");
+    setMessageObjective("apresentar uma opção de qualidade");
+    setMessageQuestion("");
+    setMessageChannel("WhatsApp");
+    setMessageTone("Consultivo");
+    setMessageProof({ company: true, quality: true, guarantee: true });
+    setTrainingMessages([]);
+    setTrainingFeedback(null);
+    setTrainingStarted(false);
+  }
+
+  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthError("");
+    if (authMode === "register" && authForm.password !== authForm.confirmPassword) {
+      setAuthError("As senhas não coincidem.");
+      return;
+    }
+
+    setAuthBusy(true);
+    try {
+      const endpoint = authMode === "register" ? "/api/auth/register" : "/api/auth/login";
+      const body = authMode === "register"
+        ? { displayName: authForm.displayName, username: authForm.username, branch: authForm.branch, password: authForm.password }
+        : { username: authForm.username, password: authForm.password };
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await readResponseJson<{ user?: EmployeeUser; admin?: boolean; error?: string }>(response);
+      if (!response.ok || (!data.user && data.admin !== true)) throw new Error(data.error || "Não foi possível concluir o acesso.");
+      setHydrated(false);
+      setDataLoaded(false);
+      setIsAdmin(data.admin === true);
+      setAuthUser(data.user ?? null);
+      setAuthForm({ displayName: "", username: "", branch: "Araraquara", password: "", confirmPassword: "" });
+      setSection("overview");
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Não foi possível concluir o acesso.");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleLogout() {
+    setAuthBusy(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      resetEmployeeWorkspace();
+      setIsAdmin(false);
+      setAuthUser(null);
+      setHydrated(false);
+      setDataLoaded(false);
+      setSection("overview");
+      setAuthMode("login");
+      setAuthError("");
+      setAuthForm({ displayName: "", username: "", branch: "Araraquara", password: "", confirmPassword: "" });
+      setAuthBusy(false);
+    }
   }
 
   function toggleSales(id: string) {
@@ -2222,7 +2696,7 @@ export default function Home() {
         }),
       });
       if (!response.ok) throw new Error("AI não configurada");
-      const data = await response.json() as Partial<TrainingFeedback>;
+      const data = await readResponseJson<Partial<TrainingFeedback>>(response);
       if (!data.customerReply || typeof data.score !== "number") throw new Error("Resposta inválida");
       const feedback: TrainingFeedback = {
         mode: data.mode === "ia" ? "ia" : "guiado",
@@ -2259,7 +2733,7 @@ export default function Home() {
     setFollowUps((current) => [{ id: `local-${Date.now()}`, client: newClient.trim(), status: newStatus, next: newNext.trim(), priority: newPriority, done: false }, ...current]);
     setNewClient("");
     setNewNext("");
-    showToast("Pendência adicionada ao controle local");
+    showToast("Pendência adicionada à sua conta");
   }
 
   function selectBrand(next: BrandId) {
@@ -2326,7 +2800,7 @@ export default function Home() {
   }
 
   function clearFactoryItems() {
-    if (!window.confirm("Limpar os itens da requisição? As linhas já enviadas serão removidas deste navegador.")) return;
+    if (!window.confirm("Limpar os itens da requisição? As linhas já enviadas serão removidas da sua conta.")) return;
     setFactoryItems([]);
     showToast("Itens enviados removidos");
   }
@@ -2400,6 +2874,24 @@ export default function Home() {
     }
   }
 
+  if (authLoading || (authUser && !dataLoaded)) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-card auth-loading" aria-live="polite">
+          <div className="brand-mark auth-mark">MP</div>
+          <strong>{authUser ? "Abrindo seu espaço…" : "Carregando acesso…"}</strong>
+          <span>Preparando o Guia Comercial Mult Portas</span>
+        </section>
+      </main>
+    );
+  }
+
+  if (!authUser && !isAdmin) {
+    return <AuthScreen mode={authMode} setMode={setAuthMode} form={authForm} setForm={setAuthForm} error={authError} busy={authBusy} onSubmit={handleAuthSubmit} />;
+  }
+
+  if (isAdmin) return <AccountCenter onLogout={handleLogout} />;
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -2427,7 +2919,7 @@ export default function Home() {
             <span className="live-dot" />
             <div><strong>Base estudada</strong><small>5 catálogos · 8 marcas</small></div>
           </div>
-          <div className="sidebar-foot">Atualização local · {today}</div>
+          <div className="sidebar-foot">Dados separados por funcionário · {today}</div>
         </div>
       </aside>
 
@@ -2435,7 +2927,14 @@ export default function Home() {
         <header className="topbar">
           <div className="mobile-brand"><span className="brand-mark small">MP</span><strong>GUIA MULT PORTAS</strong></div>
           <div className="breadcrumbs"><span>Mult Portas</span><b>/</b><strong>{sections.find((item) => item.id === section)?.label}</strong></div>
-          <div className="topbar-actions"><span className="date-chip">{today}</span><span className="user-chip">Í</span></div>
+          <div className="topbar-actions">
+            <span className="date-chip">{today}</span>
+            <div className="user-area">
+              <span className="user-chip">{authUser.displayName.slice(0, 1).toUpperCase()}</span>
+              <div className="user-details"><strong>{authUser.displayName}</strong><small>{authUser.branch} · {authUser.username}</small></div>
+              <button className="logout-button" type="button" onClick={handleLogout}>Sair da conta</button>
+            </div>
+          </div>
         </header>
 
         <div className="mobile-nav" aria-label="Navegação rápida">
@@ -2697,10 +3196,10 @@ export default function Home() {
 
               <div className="factory-submission-note" role="status" aria-live="polite">
                 <span><b>{filledFactoryItems.length}</b> {filledFactoryItems.length === 1 ? "item preparado" : "itens preparados"}</span>
-                <span>Os itens ficam salvos neste navegador e podem ser exportados para Excel quando a consulta estiver pronta.</span>
+                <span>Os itens ficam salvos separadamente na sua conta e podem ser exportados para Excel quando a consulta estiver pronta.</span>
               </div>
 
-              <div className="factory-bottom-bar" role="status" aria-live="polite"><span>✓ Salvo automaticamente neste navegador</span><span>→ Exporte o arquivo depois de finalizar o localizador.</span></div>
+              <div className="factory-bottom-bar" role="status" aria-live="polite"><span>✓ Salvo automaticamente na sua conta</span><span>→ Exporte o arquivo depois de finalizar o localizador.</span></div>
             </section>
 
             <section className="factory-notes-grid">
@@ -2733,7 +3232,7 @@ export default function Home() {
 
         {section === "control" && (
           <div className="page-content">
-            <div className="section-intro control-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> CONTROLE COMERCIAL</span><h1>Nada fica solto.<br /><em>Tudo tem próximo passo.</em></h1><p>Use este quadro para anotações locais do navegador. A planilha oficial continua sendo atualizada somente quando você pedir.</p></div><div className="control-total"><strong>20</strong><span>orçamentos de referência</span><small>10 oficiais · 10 incompletos</small></div></div>
+            <div className="section-intro control-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> CONTROLE COMERCIAL</span><h1>Nada fica solto.<br /><em>Tudo tem próximo passo.</em></h1><p>Use este quadro para organizar os atendimentos da sua conta. A planilha oficial continua sendo atualizada somente quando você pedir.</p></div><div className="control-total"><strong>20</strong><span>orçamentos de referência</span><small>10 oficiais · 10 incompletos</small></div></div>
             <section className="control-rules"><div><span className="rule-number">01</span><strong>Número imutável</strong><p>O oficial não muda.</p></div><div><span className="rule-number">02</span><strong>Um status principal</strong><p>Sem duplicidade de cobrança.</p></div><div><span className="rule-number">03</span><strong>Histórico separado</strong><p>Encerrado não volta sozinho.</p></div><div><span className="rule-number">04</span><strong>Valor exato</strong><p>Centavos preservados.</p></div></section>
             <section className="panel add-followup"><div><span className="section-kicker">NOVA PENDÊNCIA LOCAL</span><h2>Registrar sem perder tempo</h2></div><form onSubmit={addFollowUp}><input value={newClient} onChange={(event) => setNewClient(event.target.value)} placeholder="Cliente / orçamento" aria-label="Cliente ou orçamento" /><input value={newNext} onChange={(event) => setNewNext(event.target.value)} placeholder="Próxima ação" aria-label="Próxima ação" /><select value={newStatus} onChange={(event) => setNewStatus(event.target.value)} aria-label="Status">{statusOptions.map((status) => <option key={status}>{status}</option>)}</select><select value={newPriority} onChange={(event) => setNewPriority(event.target.value as Priority)} aria-label="Prioridade"><option>Alta</option><option>Média</option><option>Baixa</option></select><button className="button dark" type="submit">Adicionar <span>+</span></button></form></section>
             <section className="board-heading"><div><span className="section-kicker">QUADRO DE AÇÃO</span><h2>O que merece atenção</h2></div><select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value)} aria-label="Filtrar status"><option>Todos</option>{statusOptions.map((status) => <option key={status}>{status}</option>)}</select></section>

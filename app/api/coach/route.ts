@@ -1,3 +1,5 @@
+import { getSessionUser } from "../auth/_lib";
+
 type RuntimeEnv = {
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
@@ -68,6 +70,16 @@ async function getRuntime(): Promise<RuntimeEnv> {
 }
 
 export async function POST(request: Request) {
+  try {
+    return await handleCoach(request);
+  } catch {
+    return jsonResponse({ error: "Não foi possível carregar o treinador agora." }, 503);
+  }
+}
+
+async function handleCoach(request: Request) {
+  if (!(await getSessionUser(request))) return jsonResponse({ error: "Faça login para usar o treinador." }, 401);
+
   let body: CoachRequest;
   try {
     body = await request.json() as CoachRequest;
