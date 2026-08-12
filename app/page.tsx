@@ -313,6 +313,21 @@ function safelyParseJson(value: string | null): unknown {
   }
 }
 
+// GitHub Pages is static, so its API requests use the functional Sites
+// deployment. The internal deployment keeps same-origin requests.
+const PUBLIC_API_ORIGIN = "https://guia-comercial-mult-portas.eletrovale-cont.chatgpt.site";
+
+function apiUrl(path: string) {
+  if (typeof window !== "undefined" && window.location.hostname.endsWith(".github.io")) {
+    return `${PUBLIC_API_ORIGIN}${path}`;
+  }
+  return path;
+}
+
+function apiFetch(path: string, init: RequestInit = {}) {
+  return fetch(apiUrl(path), { ...init, credentials: "include" });
+}
+
 async function readResponseJson<T>(response: Response): Promise<T> {
   const raw = await response.text();
   if (!raw.trim()) throw new Error("O servidor não respondeu. Tente novamente.");
@@ -1952,7 +1967,7 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/admin/users", { cache: "no-store" });
+      const response = await apiFetch("/api/admin/users", { cache: "no-store" });
       const payload = await readResponseJson<{ users?: AccountRecord[]; error?: string }>(response);
       if (!response.ok) throw new Error(payload.error || "Não foi possível carregar as contas.");
       setAccounts(Array.isArray(payload.users) ? payload.users : []);
@@ -1973,7 +1988,7 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
     setSelectedState(null);
     setDetailsLoading(true);
     try {
-      const response = await fetch(`/api/admin/users/${account.id}`, { cache: "no-store" });
+      const response = await apiFetch(`/api/admin/users/${account.id}`, { cache: "no-store" });
       const payload = await readResponseJson<{ user?: AccountRecord; state?: PersistedGuideState | null; error?: string }>(response);
       if (!response.ok || !payload.user) throw new Error(payload.error || "Não foi possível abrir os dados da conta.");
       setSelectedAccount(payload.user);
@@ -2144,7 +2159,7 @@ export default function Home() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/auth/me", { cache: "no-store" })
+    apiFetch("/api/auth/me", { cache: "no-store" })
       .then(async (response) => response.ok ? await readResponseJson<{ user?: EmployeeUser | null; admin?: boolean }>(response) : { user: null, admin: false })
       .then((data) => {
         if (cancelled) return;
@@ -2165,7 +2180,7 @@ export default function Home() {
     const timer = window.setTimeout(async () => {
       let state: PersistedGuideState | null = null;
       try {
-        const response = await fetch("/api/data", { cache: "no-store" });
+        const response = await apiFetch("/api/data", { cache: "no-store" });
         if (response.ok) {
           const payload = await readResponseJson<{ state?: unknown }>(response);
           if (payload.state && typeof payload.state === "object" && !Array.isArray(payload.state)) {
@@ -2307,7 +2322,7 @@ export default function Home() {
     localStorage.setItem(scopedStorageKey(authUser.id, "drawer-checks-v1"), JSON.stringify(drawerChecks));
 
     const timer = window.setTimeout(() => {
-      fetch("/api/data", {
+      apiFetch("/api/data", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ state }),
@@ -2421,7 +2436,7 @@ export default function Home() {
       const body = authMode === "register"
         ? { displayName: authForm.displayName, username: authForm.username, branch: authForm.branch, password: authForm.password }
         : { username: authForm.username, password: authForm.password };
-      const response = await fetch(endpoint, {
+      const response = await apiFetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2444,7 +2459,7 @@ export default function Home() {
   async function handleLogout() {
     setAuthBusy(true);
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await apiFetch("/api/auth/logout", { method: "POST" });
     } finally {
       resetEmployeeWorkspace();
       setIsAdmin(false);
@@ -2686,7 +2701,7 @@ export default function Home() {
     setTrainingBusy(true);
 
     try {
-      const response = await fetch("/api/coach", {
+      const response = await apiFetch("/api/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

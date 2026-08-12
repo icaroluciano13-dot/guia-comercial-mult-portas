@@ -1,10 +1,12 @@
 import { eq } from "drizzle-orm";
+import { env } from "cloudflare:workers";
 import { getDb } from "../../../db";
 import { adminSessions } from "../../../db/schema";
 import { digest, getCookie, makeToken } from "../auth/_lib";
 
 export const ADMIN_USERNAME = "admin";
-export const ADMIN_PASSWORD = "admin";
+const runtimeEnv = env as unknown as { ADMIN_PASSWORD?: string };
+export const ADMIN_PASSWORD = runtimeEnv.ADMIN_PASSWORD ?? "";
 export const ADMIN_COOKIE = "mp_admin_session";
 export const ADMIN_SESSION_MAX_AGE = 60 * 60 * 8;
 
@@ -16,8 +18,19 @@ export function isOwnerRequest(request: Request) {
 }
 
 export function adminSessionCookie(request: Request, token: string, maxAge = ADMIN_SESSION_MAX_AGE) {
-  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
-  return `${ADMIN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+  const secureRequest = new URL(request.url).protocol === "https:";
+  const origin = request.headers.get("origin");
+  let crossOrigin = false;
+  if (origin) {
+    try {
+      crossOrigin = new URL(origin).origin !== new URL(request.url).origin;
+    } catch {
+      crossOrigin = false;
+    }
+  }
+  const secure = secureRequest ? "; Secure" : "";
+  const sameSite = secureRequest && crossOrigin ? "None" : "Lax";
+  return `${ADMIN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${secure}`;
 }
 
 export function clearedAdminCookie(request: Request) {

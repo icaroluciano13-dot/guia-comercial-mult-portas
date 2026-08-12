@@ -59,3 +59,38 @@ test("auth and employee-data errors always return JSON", async () => {
   assert.equal(logout.body.ok, true);
   assert.match(logout.response.headers.get("set-cookie") ?? "", /mp_employee_session=;/);
 });
+
+test("GitHub Pages API preflight returns credentialed CORS headers", async () => {
+  const worker = await loadWorker();
+  const response = await worker.fetch(
+    new Request("https://guia-comercial-mult-portas.eletrovale-cont.chatgpt.site/api/auth/login", {
+      method: "OPTIONS",
+      headers: { Origin: "https://icaroluciano13-dot.github.io" },
+    }),
+    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
+    executionContext(),
+  );
+
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get("access-control-allow-origin"), "https://icaroluciano13-dot.github.io");
+  assert.equal(response.headers.get("access-control-allow-credentials"), "true");
+  assert.match(response.headers.get("access-control-allow-methods") ?? "", /POST/);
+});
+
+test("cross-origin logout remains JSON and sets cross-site cookies", async () => {
+  const worker = await loadWorker();
+  const response = await worker.fetch(
+    new Request("https://guia-comercial-mult-portas.eletrovale-cont.chatgpt.site/api/auth/logout", {
+      method: "POST",
+      headers: { Origin: "https://icaroluciano13-dot.github.io" },
+    }),
+    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
+    executionContext(),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("access-control-allow-origin"), "https://icaroluciano13-dot.github.io");
+  assert.equal(response.headers.get("access-control-allow-credentials"), "true");
+  assert.match(response.headers.get("set-cookie") ?? "", /SameSite=None/);
+  assert.deepEqual(JSON.parse(await response.text()), { ok: true });
+});

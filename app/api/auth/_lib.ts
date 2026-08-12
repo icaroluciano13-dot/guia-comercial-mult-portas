@@ -53,9 +53,21 @@ export function getCookie(request: Request, name: string) {
   return null;
 }
 
+function isCrossOriginRequest(request: Request) {
+  const origin = request.headers.get("origin");
+  if (!origin) return false;
+  try {
+    return new URL(origin).origin !== new URL(request.url).origin;
+  } catch {
+    return false;
+  }
+}
+
 export function sessionCookie(request: Request, token: string, maxAge = SESSION_MAX_AGE) {
-  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
-  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+  const secureRequest = new URL(request.url).protocol === "https:";
+  const secure = secureRequest ? "; Secure" : "";
+  const sameSite = secureRequest && isCrossOriginRequest(request) ? "None" : "Lax";
+  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${secure}`;
 }
 
 export function clearedSessionCookie(request: Request) {

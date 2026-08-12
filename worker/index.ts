@@ -19,6 +19,27 @@ interface ExecutionContext {
   passThroughOnException(): void;
 }
 
+const ALLOWED_CORS_ORIGINS = new Set([
+  "https://icaroluciano13-dot.github.io",
+]);
+
+function withCors(request: Request, response: Response) {
+  const origin = request.headers.get("Origin");
+  if (!origin || !ALLOWED_CORS_ORIGINS.has(origin)) return response;
+
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", origin);
+  headers.set("Access-Control-Allow-Credentials", "true");
+  headers.set("Access-Control-Allow-Headers", "Content-Type");
+  headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  headers.set("Vary", headers.get("Vary") ? `${headers.get("Vary")}, Origin` : "Origin");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 // Image security config. SVG sources with .svg extension auto-skip the
 // optimization endpoint on the client side (served directly, no proxy).
 // To route SVGs through the optimizer (with security headers), set
@@ -28,6 +49,10 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") {
+      return withCors(request, new Response(null, { status: 204 }));
+    }
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
@@ -40,7 +65,8 @@ const worker = {
       }, allowedWidths);
     }
 
-    return handler.fetch(request, env, ctx);
+    const response = await handler.fetch(request, env, ctx);
+    return url.pathname.startsWith("/api/") ? withCors(request, response) : response;
   },
 };
 

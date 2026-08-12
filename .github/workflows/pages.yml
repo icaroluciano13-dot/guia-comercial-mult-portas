@@ -30,6 +30,12 @@ jobs:
       - name: Instalar dependências
         run: npm ci
 
+      - name: Verificar codigo
+        run: npm run lint
+
+      - name: Executar testes
+        run: npm test
+
       - name: Gerar versão pública
         run: npm run build:github
 
