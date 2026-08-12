@@ -75,6 +75,8 @@ test("GitHub Pages API preflight returns credentialed CORS headers", async () =>
   assert.equal(response.headers.get("access-control-allow-origin"), "https://icaroluciano13-dot.github.io");
   assert.equal(response.headers.get("access-control-allow-credentials"), "true");
   assert.match(response.headers.get("access-control-allow-methods") ?? "", /POST/);
+  assert.match(response.headers.get("access-control-allow-methods") ?? "", /PATCH/);
+  assert.match(response.headers.get("access-control-allow-methods") ?? "", /DELETE/);
 });
 
 test("cross-origin logout remains JSON and sets cross-site cookies", async () => {
@@ -120,4 +122,27 @@ test("admin login rejects an unapproved web origin", async () => {
 
   assert.equal(response.status, 401);
   assert.deepEqual(JSON.parse(await response.text()), { error: "Usuário ou senha incorretos." });
+});
+
+test("admin profile management exposes protected create, edit and delete routes", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const collectionRoute = await readFile(new URL("../app/api/admin/users/route.ts", import.meta.url), "utf8");
+  const itemRoute = await readFile(new URL("../app/api/admin/users/[id]/route.ts", import.meta.url), "utf8");
+  assert.match(collectionRoute, /export async function POST/);
+  assert.match(collectionRoute, /getAdminSession/);
+  assert.match(itemRoute, /export async function PATCH/);
+  assert.match(itemRoute, /export async function DELETE/);
+  assert.match(itemRoute, /employeeSessions/);
+  assert.match(itemRoute, /employeeData/);
+  assert.match(itemRoute, /getAdminSession/);
+});
+
+test("employee authentication UI stays separate from the guide workspace", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const authSource = await readFile(new URL("../app/auth-screen.tsx", import.meta.url), "utf8");
+  assert.match(pageSource, /from ["']\.\/auth-screen["']/);
+  assert.doesNotMatch(pageSource, /function AuthScreen\(/);
+  assert.match(authSource, /export function AuthScreen/);
+  assert.match(authSource, /className="auth-shell"/);
 });

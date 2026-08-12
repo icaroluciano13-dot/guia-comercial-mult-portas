@@ -19,26 +19,6 @@ interface ExecutionContext {
   passThroughOnException(): void;
 }
 
-const ALLOWED_CORS_ORIGINS = new Set([
-  "https://icaroluciano13-dot.github.io",
-]);
-
-function withCors(request: Request, response: Response) {
-  const origin = request.headers.get("Origin");
-  if (!origin || !ALLOWED_CORS_ORIGINS.has(origin)) return response;
-
-  const headers = new Headers(response.headers);
-  headers.set("Access-Control-Allow-Origin", origin);
-  headers.set("Access-Control-Allow-Credentials", "true");
-  headers.set("Access-Control-Allow-Headers", "Content-Type");
-  headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
-  headers.set("Vary", headers.get("Vary") ? `${headers.get("Vary")}, Origin` : "Origin");
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
-}
 
 const ALLOWED_CORS_ORIGINS = new Set([
   "https://icaroluciano13-dot.github.io",
