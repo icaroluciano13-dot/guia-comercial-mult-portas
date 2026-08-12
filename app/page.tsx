@@ -40,10 +40,22 @@ type PersistedGuideState = {
   drawerChecks?: unknown;
 };
 
+type EmployeeMetrics = {
+  leads: number;
+  quotes: number;
+  officialQuotes: number;
+  incompleteQuotes: number;
+  followups: number;
+  closed: number;
+  ticket: number;
+};
+
 type TrainingStats = {
   rounds: number;
   best: number;
   scenarios: string[];
+  scoreHistory: number[];
+  skillHistory: TrainingSkillScores[];
 };
 
 type TrainingMessage = {
@@ -74,13 +86,20 @@ type SpeechRecognitionLike = {
 };
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
+type TrainingSkillId = "acolhimento" | "diagnostico" | "precisao" | "valor" | "proximoPasso";
+type TrainingSkillScores = Record<TrainingSkillId, number>;
+
 type TrainingFeedback = {
   mode: "ia" | "guiado";
   score: number;
+  phase: string;
+  skillScores: TrainingSkillScores;
   summary: string;
   strengths: string[];
   improvements: string[];
   nextMove: string;
+  coachQuestion: string;
+  retryGuide: string;
   customerReply: string;
   coachNote: string;
   customerMood: string;
@@ -100,6 +119,56 @@ type TrainingScenario = {
   avoid: string[];
 };
 
+const trainingSkillMeta: { id: TrainingSkillId; label: string; hint: string }[] = [
+  { id: "acolhimento", label: "Acolhimento", hint: "escuta, respeito e segurança" },
+  { id: "diagnostico", label: "Diagnóstico", hint: "perguntas que destravam o cenário" },
+  { id: "precisao", label: "Precisão", hint: "medida, composição e confirmação" },
+  { id: "valor", label: "Valor", hint: "benefício antes do desconto" },
+  { id: "proximoPasso", label: "Próximo passo", hint: "ação clara e combinada" },
+];
+
+function clampTrainingScore(value: number, fallback = 0) {
+  const safeValue = Number.isFinite(value) ? value : fallback;
+  return Math.max(0, Math.min(10, Math.round(safeValue)));
+}
+
+function isTrainingRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function uniformSkillScores(score: number): TrainingSkillScores {
+  const safeScore = clampTrainingScore(score);
+  return { acolhimento: safeScore, diagnostico: safeScore, precisao: safeScore, valor: safeScore, proximoPasso: safeScore };
+}
+
+function normalizeSkillScores(value: unknown, fallback = 0): TrainingSkillScores {
+  const source = isTrainingRecord(value) ? value : {};
+  return {
+    acolhimento: clampTrainingScore(Number(source.acolhimento), fallback),
+    diagnostico: clampTrainingScore(Number(source.diagnostico), fallback),
+    precisao: clampTrainingScore(Number(source.precisao), fallback),
+    valor: clampTrainingScore(Number(source.valor), fallback),
+    proximoPasso: clampTrainingScore(Number(source.proximoPasso), fallback),
+  };
+}
+
+function averageSkillScores(history: TrainingSkillScores[]): TrainingSkillScores {
+  if (!history.length) return uniformSkillScores(0);
+  const totals = history.reduce((current, item) => ({
+    acolhimento: current.acolhimento + item.acolhimento,
+    diagnostico: current.diagnostico + item.diagnostico,
+    precisao: current.precisao + item.precisao,
+    valor: current.valor + item.valor,
+    proximoPasso: current.proximoPasso + item.proximoPasso,
+  }), uniformSkillScores(0));
+  return {
+    acolhimento: clampTrainingScore(totals.acolhimento / history.length),
+    diagnostico: clampTrainingScore(totals.diagnostico / history.length),
+    precisao: clampTrainingScore(totals.precisao / history.length),
+    valor: clampTrainingScore(totals.valor / history.length),
+    proximoPasso: clampTrainingScore(totals.proximoPasso / history.length),
+  };
+}
 type CatalogItem = {
   id: string;
   brand: BrandId;
@@ -299,8 +368,6 @@ const STORAGE = {
   factory: "mult-portas-guia-factory-v1",
 };
 
-const LEGACY_MIGRATION_KEY = "mult-portas-guia-legacy-migrated-v1";
-
 function scopedStorageKey(userId: number, key: string) {
   return `mult-portas-guia-user-${userId}-${key}`;
 }
@@ -356,24 +423,6 @@ function readScopedLocalState(userId: number): PersistedGuideState | null {
     hasScopedState = true;
   }
   if (hasScopedState) return state;
-
-  // A version that existed before employee accounts used global browser keys.
-  // Migrate those keys only once to the first account that signs in on this device.
-  if (!localStorage.getItem(LEGACY_MIGRATION_KEY)) {
-    let migrated = false;
-    for (const key of Object.keys(STORAGE) as (keyof typeof STORAGE)[]) {
-      const legacyValue = localStorage.getItem(STORAGE[key]);
-      if (legacyValue !== null) {
-        localStorage.setItem(scopedStorageKey(userId, STORAGE[key]), legacyValue);
-        localStorage.removeItem(STORAGE[key]);
-        state[key] = safelyParseJson(legacyValue);
-        migrated = true;
-      }
-    }
-    localStorage.setItem(LEGACY_MIGRATION_KEY, "1");
-    if (migrated) return state;
-  }
-
   return null;
 }
 
@@ -1539,13 +1588,35 @@ const statusOptions = [
   "Encerrado",
 ];
 
-const defaultFollowUps: LocalFollowUp[] = [
-  { id: "measure", client: "Medidas pendentes", status: "Aguardando medidas", next: "Pedir largura, altura e parede", priority: "Alta", done: false },
-  { id: "decision", client: "Orçamentos com decisão aberta", status: "Aguardando decisão", next: "Comparar principal x alternativa", priority: "Alta", done: false },
-  { id: "incomplete", client: "10 cadastros incompletos", status: "A confirmar", next: "Completar número, item e condição", priority: "Média", done: false },
-];
+const defaultFollowUps: LocalFollowUp[] = [];
 
-const defaultMetrics = { leads: 0, quotes: 20, followups: 0, closed: 1, ticket: 0 };
+const defaultMetrics: EmployeeMetrics = {
+  leads: 0,
+  quotes: 0,
+  officialQuotes: 0,
+  incompleteQuotes: 0,
+  followups: 0,
+  closed: 0,
+  ticket: 0,
+};
+
+function normalizeMetricNumber(value: unknown) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, numeric) : 0;
+}
+
+function normalizeMetrics(value: unknown): EmployeeMetrics {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value as Partial<Record<keyof EmployeeMetrics, unknown>> : {};
+  return {
+    leads: Math.round(normalizeMetricNumber(source.leads)),
+    quotes: Math.round(normalizeMetricNumber(source.quotes)),
+    officialQuotes: Math.round(normalizeMetricNumber(source.officialQuotes)),
+    incompleteQuotes: Math.round(normalizeMetricNumber(source.incompleteQuotes)),
+    followups: Math.round(normalizeMetricNumber(source.followups)),
+    closed: Math.round(normalizeMetricNumber(source.closed)),
+    ticket: normalizeMetricNumber(source.ticket),
+  };
+}
 const dailyChecks = [
   { id: "open", title: "Abrir o dia", description: "Ver pendências por prioridade e revisar medidas que faltam." },
   { id: "quote", title: "Orçar com clareza", description: "Uma principal, uma alternativa e campos ‘A confirmar’ visíveis." },
@@ -1697,6 +1768,7 @@ function detectCoachSignals(sellerMessage: string): CoachSignals {
     mentionsInstallation: /(instal|montar|montagem|espuma|sujeira|obra)/.test(normalized),
     mentionsEvidence: /(foto|fotos|etiqueta|numero do orcamento|nota|embalagem|evidencia)/.test(normalized),
     saysUncertain: /(nao sei|ainda nao|nao medi|depois|vou ver|vou perguntar|talvez|indecis|duvida)/.test(normalized),
+    hasEmpathy: /(entendo|entendi|perfeito|certo|claro|sem problema|vamos|faz sentido|obrigad|sinto muito)/.test(normalized),
   };
 }
 
@@ -1803,18 +1875,31 @@ function reactiveCustomerTurn(scenario: TrainingScenario, signals: CoachSignals,
 
 function guidedCoach(scenario: TrainingScenario, sellerMessage: string, turn: number): TrainingFeedback {
   const signals = detectCoachSignals(sellerMessage);
-  let score = 4;
-  if (signals.hasQuestion) score += 1;
-  if (signals.hasEnvironment) score += 1;
-  if (signals.hasMeasure) score += 1;
-  if (signals.hasBenefit) score += 1;
-  if (signals.hasNextMove) score += 1;
-  if (signals.hasGuardrail) score += 1;
-  if (sellerMessage.trim().length < 28) score -= 1;
-  if (signals.hasPressure) score -= 2;
-  if (signals.asksPrice && !signals.hasEnvironment && !signals.hasMeasure) score -= 1;
-  if (scenario.id === "price-objection" && !signals.asksIncluded && !signals.comparesPrice) score -= 1;
-  score = Math.max(1, Math.min(10, score));
+  const skillScores: TrainingSkillScores = {
+    acolhimento: 4,
+    diagnostico: 4,
+    precisao: 4,
+    valor: 4,
+    proximoPasso: 4,
+  };
+  if (signals.hasEmpathy) skillScores.acolhimento += 3;
+  if (signals.hasQuestion) skillScores.diagnostico += 2;
+  if (signals.hasEnvironment || signals.hasMeasure) skillScores.diagnostico += 1;
+  if (signals.hasMeasure || signals.hasGuardrail) skillScores.precisao += 2;
+  if (signals.asksIncluded || signals.hasBenefit) skillScores.valor += 2;
+  if (signals.hasNextMove) skillScores.proximoPasso += 3;
+  if (sellerMessage.trim().length < 28) { skillScores.diagnostico -= 1; skillScores.proximoPasso -= 1; }
+  if (signals.hasPressure) { skillScores.acolhimento -= 2; skillScores.precisao -= 2; }
+  if (signals.asksPrice && !signals.hasEnvironment && !signals.hasMeasure) skillScores.diagnostico -= 2;
+  if (scenario.id === "price-objection" && !signals.asksIncluded && !signals.comparesPrice) skillScores.valor -= 2;
+  if (turn > 0 && !signals.hasQuestion) skillScores.diagnostico -= 1;
+  if (["price-objection", "silent-customer", "after-sales"].includes(scenario.id) && !signals.hasEmpathy) skillScores.acolhimento -= 2;
+  if (scenario.id === "after-sales" && !signals.hasEmpathy) skillScores.precisao -= 1;
+  if (scenario.id === "timeline" && !signals.mentionsTiming) skillScores.proximoPasso -= 1;
+  if (signals.saysUncertain && !signals.hasGuardrail) skillScores.precisao -= 1;
+  (Object.keys(skillScores) as TrainingSkillId[]).forEach((key) => { skillScores[key] = clampTrainingScore(skillScores[key], 1); });
+  let score = clampTrainingScore(skillScores.acolhimento * 0.2 + skillScores.diagnostico * 0.25 + skillScores.precisao * 0.25 + skillScores.valor * 0.15 + skillScores.proximoPasso * 0.15, 1);
+  if (skillScores.diagnostico < 5 || skillScores.precisao < 5) score = Math.min(score, 7);
 
   const reactive = reactiveCustomerTurn(scenario, signals, turn);
   const strengths: string[] = [];
@@ -1830,6 +1915,8 @@ function guidedCoach(scenario: TrainingScenario, sellerMessage: string, turn: nu
   else if (signals.comparesPrice || signals.asksPrice) improvements.push("Explique o que está incluso e o que a solução resolve antes de entrar em desconto.");
   if (signals.hasNextMove) strengths.push("Você deixou uma próxima ação clara para o cliente.");
   else improvements.push("Feche a mensagem com uma ação objetiva: pedir medida, enviar foto, comparar opções ou combinar retorno.");
+  if (signals.hasEmpathy) strengths.push("Você acolheu o cliente antes de conduzir a próxima etapa.");
+  else if (["price-objection", "silent-customer", "after-sales"].includes(scenario.id)) improvements.push("Comece acolhendo a situação do cliente antes de entrar na solução ou na conferência.");
   if (signals.hasGuardrail) strengths.push("Você protegeu a conversa contra promessa sem confirmação.");
   else if (signals.mentionsTiming || signals.mentionsInstallation || scenario.id === "after-sales") improvements.push("Quando faltar confirmação, use ‘A confirmar’ e diga exatamente o que será conferido.");
   if (signals.hasPressure) improvements.push("Evite urgência artificial; use apenas cronograma real, medida e disponibilidade confirmada.");
@@ -1845,10 +1932,14 @@ function guidedCoach(scenario: TrainingScenario, sellerMessage: string, turn: nu
   return {
     mode: "guiado",
     score,
+    phase: turn === 0 ? "Abertura e diagnóstico" : turn < 3 ? "Descoberta e condução" : "Confirmação e fechamento",
+    skillScores,
     summary,
     strengths: strengths.slice(0, 3),
     improvements: improvements.slice(0, 3),
     nextMove: reactive.nextMove,
+    coachQuestion: signals.hasQuestion ? "O cliente respondeu exatamente ao que você perguntou?" : "Qual pergunta única faria o cliente avançar agora?",
+    retryGuide: score >= 8 ? "Repita mantendo a mesma clareza e reduza a mensagem ao essencial." : "Na próxima tentativa, priorize a competência com menor nota e termine com uma ação concreta.",
     customerReply: reactive.customerReply,
     coachNote: reactive.coachNote,
     customerMood: reactive.customerMood,
@@ -2180,7 +2271,7 @@ export default function Home() {
   const [voiceStatus, setVoiceStatus] = useState("Pronto para treinar por áudio");
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const [trainingLevelFilter, setTrainingLevelFilter] = useState<TrainingFilter>("Todos");
-  const [trainingStats, setTrainingStats] = useState<TrainingStats>({ rounds: 0, best: 0, scenarios: [] });
+  const [trainingStats, setTrainingStats] = useState<TrainingStats>({ rounds: 0, best: 0, scenarios: [], scoreHistory: [], skillHistory: [] });
   const [factoryItems, setFactoryItems] = useState<FactoryRequestItem[]>(defaultFactoryItems);
   const [factoryWizardStep, setFactoryWizardStep] = useState(0);
   const [factoryWizardDraft, setFactoryWizardDraft] = useState<Record<FactoryWizardField, string>>(blankFactoryWizard);
@@ -2250,13 +2341,19 @@ export default function Home() {
       setDoneTiming(savedTiming.filter((item): item is string => typeof item === "string"));
       if (savedFollowUps) setFollowUps(savedFollowUps as LocalFollowUp[]);
       setDailyDone(savedChecks.filter((item): item is string => typeof item === "string"));
-      if (savedMetrics && typeof savedMetrics === "object") setMetrics({ ...defaultMetrics, ...savedMetrics as typeof defaultMetrics });
+      if (savedMetrics && typeof savedMetrics === "object") setMetrics(normalizeMetrics(savedMetrics));
       if (savedTraining && typeof savedTraining === "object") {
-        const training = savedTraining as { rounds?: unknown; sessions?: unknown; best?: unknown; scenarios?: unknown };
+        const training = savedTraining as { rounds?: unknown; sessions?: unknown; best?: unknown; scenarios?: unknown; scoreHistory?: unknown; skillHistory?: unknown };
         setTrainingStats({
           rounds: Number(training.rounds ?? training.sessions) || 0,
           best: Number(training.best) || 0,
           scenarios: Array.isArray(training.scenarios) ? training.scenarios.filter((item): item is string => typeof item === "string") : [],
+          scoreHistory: Array.isArray(training.scoreHistory)
+            ? training.scoreHistory.filter((item): item is number => typeof item === "number" && Number.isFinite(item)).map((item) => Math.max(0, Math.min(10, Math.round(item)))).slice(-60)
+            : [],
+          skillHistory: Array.isArray(training.skillHistory)
+            ? training.skillHistory.filter(isTrainingRecord).map((item) => normalizeSkillScores(item)).slice(-60)
+            : [],
         });
       }
       if (savedFactory) {
@@ -2412,12 +2509,29 @@ export default function Home() {
   const completedSales = doneSales.length;
   const completedTiming = doneTiming.length;
   const filteredFollowUps = followUps.filter((item) => filterStatus === "Todos" || item.status === filterStatus);
+  const portfolioCount = Math.round(normalizeMetricNumber(metrics.quotes));
+  const officialQuoteCount = Math.round(normalizeMetricNumber(metrics.officialQuotes));
+  const incompleteQuoteCount = Math.round(normalizeMetricNumber(metrics.incompleteQuotes));
+  const openActionCount = incompleteQuoteCount + followUps.filter((item) => !item.done).length;
   const filledFactoryItems = factoryItems.filter(hasFactoryContent);
   const activeFactoryWizardStep = factoryWizardSteps[factoryWizardStep];
   const factoryWizardProgress = ((factoryWizardStep + 1) / factoryWizardSteps.length) * 100;
   const metricsConversion = metrics.quotes ? (metrics.closed / metrics.quotes) * 100 : 0;
   const metricsReturn = metrics.quotes ? (metrics.followups / metrics.quotes) * 100 : 0;
   const trainingTurns = trainingMessages.filter((message) => message.role === "seller").length;
+  const trainingScores = trainingStats.scoreHistory;
+  const trainingAverage = trainingScores.length ? trainingScores.reduce((total, score) => total + score, 0) / trainingScores.length : 0;
+  const recentTrainingScores = trainingScores.slice(-5);
+  const previousTrainingScores = trainingScores.slice(-10, -5);
+  const recentTrainingAverage = recentTrainingScores.length ? recentTrainingScores.reduce((total, score) => total + score, 0) / recentTrainingScores.length : 0;
+  const previousTrainingAverage = previousTrainingScores.length ? previousTrainingScores.reduce((total, score) => total + score, 0) / previousTrainingScores.length : 0;
+  const trainingTrend = recentTrainingScores.length > 0 && previousTrainingScores.length > 0 ? recentTrainingAverage - previousTrainingAverage : 0;
+  const scenarioCoverage = trainingScenarios.length ? trainingStats.scenarios.length / trainingScenarios.length : 0;
+  const trainingConsistency = Math.min(trainingStats.rounds / 12, 1);
+  const learningMetric = trainingScores.length
+    ? Math.round((trainingAverage / 10) * 60 + scenarioCoverage * 25 + trainingConsistency * 15)
+    : 0;
+  const averageTrainingSkills = averageSkillScores(trainingStats.skillHistory);
   const quickMessage = useMemo(() => buildQuickMessage({
     name: messageName,
     line: messageLine,
@@ -2449,7 +2563,7 @@ export default function Home() {
     setFollowUps(defaultFollowUps);
     setDailyDone([]);
     setMetrics(defaultMetrics);
-    setTrainingStats({ rounds: 0, best: 0, scenarios: [] });
+    setTrainingStats({ rounds: 0, best: 0, scenarios: [], scoreHistory: [], skillHistory: [] });
     setFactoryItems(defaultFactoryItems);
     setDrawerChecks({});
     setMessageName("");
@@ -2696,11 +2810,13 @@ export default function Home() {
     if (trainingStarted) startTraining(firstIndex);
   }
 
-  function recordTrainingRound(score: number, scenarioId: string) {
+  function recordTrainingRound(score: number, scenarioId: string, skillScores: TrainingSkillScores) {
     setTrainingStats((current) => ({
       rounds: current.rounds + 1,
       best: Math.max(current.best, score),
       scenarios: current.scenarios.includes(scenarioId) ? current.scenarios : [...current.scenarios, scenarioId],
+      scoreHistory: [...current.scoreHistory, score].slice(-60),
+      skillHistory: [...current.skillHistory, skillScores].slice(-60),
     }));
   }
 
@@ -2751,6 +2867,7 @@ export default function Home() {
           scenario,
           history: trainingMessages,
           sellerMessage,
+          turn,
         }),
       });
       if (!response.ok) throw new Error("AI não configurada");
@@ -2759,10 +2876,14 @@ export default function Home() {
       const feedback: TrainingFeedback = {
         mode: data.mode === "ia" ? "ia" : "guiado",
         score: Math.max(0, Math.min(10, Math.round(data.score))),
+        phase: typeof data.phase === "string" ? data.phase : turn === 0 ? "Abertura e diagnóstico" : turn < 3 ? "Descoberta e condução" : "Confirmação e fechamento",
+        skillScores: normalizeSkillScores(data.skillScores, Math.round(data.score)),
         summary: data.summary || "Continue conduzindo a conversa com clareza.",
         strengths: Array.isArray(data.strengths) ? data.strengths.slice(0, 3) : [],
         improvements: Array.isArray(data.improvements) ? data.improvements.slice(0, 3) : [],
         nextMove: data.nextMove || "Defina o próximo passo antes de encerrar.",
+        coachQuestion: typeof data.coachQuestion === "string" ? data.coachQuestion : "O que o cliente precisa saber para avançar agora?",
+        retryGuide: typeof data.retryGuide === "string" ? data.retryGuide : "Repita a resposta usando uma pergunta e uma ação concreta.",
         customerReply: data.customerReply,
         coachNote: data.coachNote || "O treinador está acompanhando o que o cliente trouxe nesta rodada.",
         customerMood: data.customerMood || "Aberto a continuar",
@@ -2770,12 +2891,12 @@ export default function Home() {
       };
       setTrainingFeedback(feedback);
       setTrainingMessages((current) => [...current, { role: "customer", text: feedback.customerReply }]);
-      recordTrainingRound(feedback.score, scenario.id);
+      recordTrainingRound(feedback.score, scenario.id, feedback.skillScores);
     } catch {
       const feedback = guidedCoach(scenario, sellerMessage, turn);
       setTrainingFeedback(feedback);
       setTrainingMessages((current) => [...current, { role: "customer", text: feedback.customerReply }]);
-      recordTrainingRound(feedback.score, scenario.id);
+      recordTrainingRound(feedback.score, scenario.id, feedback.skillScores);
       showToast("Treino guiado ativado — a conversa continua funcionando");
     } finally {
       setTrainingBusy(false);
@@ -2807,7 +2928,7 @@ export default function Home() {
 
   function updateMetric(key: keyof typeof metrics, value: string) {
     const numeric = key === "ticket" ? Number(value.replace(",", ".")) : Number.parseInt(value, 10);
-    setMetrics((current) => ({ ...current, [key]: Number.isFinite(numeric) ? numeric : 0 }));
+    setMetrics((current) => ({ ...current, [key]: Number.isFinite(numeric) ? Math.max(0, numeric) : 0 }));
   }
 
   function updateFactoryWizard(key: FactoryWizardField, value: string) {
@@ -3020,16 +3141,16 @@ export default function Home() {
                 <div className="visual-orbit orbit-two" />
                 <div className="visual-core"><span>MP</span><small>vendas</small></div>
                 <div className="visual-tag tag-top">MARCAS <b>08</b></div>
-                <div className="visual-tag tag-bottom">ORÇAMENTOS <b>20</b></div>
+                <div className="visual-tag tag-bottom">ORÇAMENTOS <b>{portfolioCount}</b></div>
                 <div className="visual-line line-one" /><div className="visual-line line-two" />
               </div>
             </section>
 
             <section className="stats-grid" aria-label="Resumo da operação">
-              <article className="stat-card"><div className="stat-top"><span>Carteira registrada</span><span className="stat-icon gray">⌁</span></div><strong>20</strong><small>orçamentos na agenda de referência</small></article>
-              <article className="stat-card"><div className="stat-top"><span>Com número oficial</span><span className="stat-icon amber">#</span></div><strong>10</strong><small>identificadores preservados</small></article>
-              <article className="stat-card"><div className="stat-top"><span>Incompletos / sem número</span><span className="stat-icon soft">!</span></div><strong>10</strong><small>não cobrar sem completar o contexto</small></article>
-              <article className="stat-card dark-stat"><div className="stat-top"><span>Próximo foco</span><span className="stat-icon light">→</span></div><strong>1 ação</strong><small>medida, decisão ou retorno marcado</small></article>
+              <article className="stat-card"><div className="stat-top"><span>Carteira registrada</span><span className="stat-icon gray">⌁</span></div><strong>{portfolioCount}</strong><small>orçamentos informados na sua conta</small></article>
+              <article className="stat-card"><div className="stat-top"><span>Com número oficial</span><span className="stat-icon amber">#</span></div><strong>{officialQuoteCount}</strong><small>identificadores preservados</small></article>
+              <article className="stat-card"><div className="stat-top"><span>Incompletos / sem número</span><span className="stat-icon soft">!</span></div><strong>{incompleteQuoteCount}</strong><small>não cobrar sem completar o contexto</small></article>
+              <article className="stat-card dark-stat"><div className="stat-top"><span>Próximo foco</span><span className="stat-icon light">→</span></div><strong>{openActionCount} {openActionCount === 1 ? "ação" : "ações"}</strong><small>{openActionCount ? "medida, decisão ou retorno marcado" : "nenhuma ação pendente"}</small></article>
             </section>
 
             <section className="trust-strip" aria-label="Provas institucionais da Mult Portas">
@@ -3110,12 +3231,29 @@ export default function Home() {
                 <h1>Venda melhor<br /><em>na prática.</em></h1>
                 <p>Treine respostas para situações reais da Mult Portas. O cliente simulado reage, o treinador avalia e você aprende a conduzir sem inventar informação.</p>
               </div>
-              <div className="training-score-card"><span>RODADAS TREINADAS</span><strong>{trainingStats.rounds}</strong><small>melhor nota: {trainingStats.best ? `${trainingStats.best}/10` : "—"}</small><small>{trainingStats.scenarios.length}/{trainingScenarios.length} cenários visitados</small></div>
+              <div className="training-score-card"><span>ÍNDICE DE APRENDIZADO</span><strong>{learningMetric}<small>/100</small></strong><small>{trainingScores.length ? `média ${trainingAverage.toFixed(1)}/10` : "comece a primeira rodada"}</small><small>{trainingStats.rounds} rodada{trainingStats.rounds === 1 ? "" : "s"} · melhor {trainingStats.best ? `${trainingStats.best}/10` : "—"}</small></div>
             </div>
 
             <section className="training-hero panel">
               <div className="training-hero-main"><div className="ai-pulse"><span>◉</span></div><div><span className="section-kicker">ASSISTENTE DE TREINO COMERCIAL</span><h2>O cliente reage ao que você fala — agora com voz.</h2><p>Fale como no WhatsApp, revise a transcrição, ouça o cliente simulado e receba uma leitura específica do que ele entendeu, do que falta e do próximo passo.</p></div></div>
               <div className="training-feature-list"><span><b>01</b> Fale como no atendimento real</span><span><b>02</b> O cliente responde ao seu conteúdo</span><span><b>03</b> Receba nota e próximo movimento</span></div>
+            </section>
+
+            <section className="learning-metric panel" aria-labelledby="learning-metric-title">
+              <div className="learning-metric-copy">
+                <span className="section-kicker">EVOLUÇÃO DO FUNCIONÁRIO</span>
+                <h2 id="learning-metric-title">Seu aprendizado está sendo acompanhado.</h2>
+                <p>O índice combina desempenho nas respostas, variedade de cenários praticados e constância. Ele é individual e fica salvo junto da sua conta.</p>
+                <div className="learning-progress" role="progressbar" aria-label="Índice de aprendizado" aria-valuemin={0} aria-valuemax={100} aria-valuenow={learningMetric}>
+                  <span style={{ width: `${learningMetric}%` }} />
+                </div>
+                <small>{trainingScores.length ? (trainingTrend > 0.2 ? `Tendência de alta: +${trainingTrend.toFixed(1)} ponto${trainingTrend >= 1 ? "s" : ""} nas últimas respostas.` : trainingTrend < -0.2 ? `Atenção: a média recente caiu ${Math.abs(trainingTrend).toFixed(1)} ponto${Math.abs(trainingTrend) >= 1 ? "s" : ""}. Revise os ajustes do treinador.` : "Tendência estável nas últimas respostas.") : "Faça uma rodada para começar a acompanhar sua evolução."}</small>
+              </div>
+              <div className="learning-metric-grid">
+                <div><strong>{trainingScores.length ? trainingAverage.toFixed(1) : "—"}</strong><span>média das notas</span></div>
+                <div><strong>{trainingStats.scenarios.length}/{trainingScenarios.length}</strong><span>cenários praticados</span></div>
+                <div><strong>{trainingStats.best ? `${trainingStats.best}/10` : "—"}</strong><span>melhor nota</span></div>
+              </div>
             </section>
 
             <div className="training-layout">
@@ -3140,6 +3278,8 @@ export default function Home() {
             </div>
 
             {trainingFeedback && <section className="training-feedback panel" aria-live="polite"><div className="feedback-score"><strong>{trainingFeedback.score}</strong><span>/10</span><small>{trainingFeedback.mode === "ia" ? "feedback da IA" : "feedback guiado"}</small></div><div className="feedback-main"><span className="section-kicker">LEITURA DA RESPOSTA</span><h2>{trainingFeedback.summary}</h2><div className="feedback-insights"><div><span className="mini-label">TOM DO CLIENTE</span><strong>{trainingFeedback.customerMood}</strong></div><div><span className="mini-label">O QUE FALTA AGORA</span><strong>{trainingFeedback.customerNeed}</strong></div><div><span className="mini-label">LEITURA DO TREINADOR</span><strong>{trainingFeedback.coachNote}</strong></div></div><div className="feedback-columns"><div><span className="mini-label">VOCÊ ACERTOU</span>{trainingFeedback.strengths.map((item) => <p key={item}>✓ {item}</p>)}</div><div><span className="mini-label">PRÓXIMO AJUSTE</span>{trainingFeedback.improvements.map((item) => <p key={item}>→ {item}</p>)}</div></div><div className="feedback-next"><span>PRÓXIMA JOGADA</span><strong>{trainingFeedback.nextMove}</strong></div><div className="feedback-actions"><button className="button dark" onClick={() => startTraining()}>Repetir cenário <span>↻</span></button><button className="text-button" onClick={resetTraining}>Escolher outro cenário <span>→</span></button></div></div></section>}
+
+            {trainingFeedback && <section className="training-coach-detail panel" aria-label="Mapa de competências da resposta"><div className="training-coach-detail-head"><div><span className="section-kicker">DEBRIEF PROFISSIONAL</span><h2>{trainingFeedback.phase}</h2></div><span className="training-coach-mode">{trainingFeedback.mode === "ia" ? "análise contextual" : "análise guiada"}</span></div><small className="training-coach-average">Média acumulada das habilidades: {Math.round((averageTrainingSkills.acolhimento + averageTrainingSkills.diagnostico + averageTrainingSkills.precisao + averageTrainingSkills.valor + averageTrainingSkills.proximoPasso) / 5)}/10</small><div className="training-skills-grid">{trainingSkillMeta.map((skill) => <div className="training-skill" key={skill.id}><div><strong>{skill.label}</strong><span>{trainingFeedback.skillScores[skill.id]}/10</span></div><small>{skill.hint}</small><div className="training-skill-bar"><span style={{ width: `${trainingFeedback.skillScores[skill.id] * 10}%` }} /></div></div>)}</div><div className="training-reflection-grid"><div><span className="mini-label">PERGUNTA DE REFLEXÃO</span><p>{trainingFeedback.coachQuestion}</p></div><div><span className="mini-label">COMO TENTAR DE NOVO</span><p>{trainingFeedback.retryGuide}</p></div></div></section>}
 
             <section className="training-rules"><div><span>01</span><strong>Diagnóstico antes do preço</strong><p>Descubra ambiente, objetivo, medida, quantidade e prazo.</p></div><div><span>02</span><strong>Valor com contexto</strong><p>Compare o que está incluso e separe principal, alternativa e “A confirmar”.</p></div><div><span>03</span><strong>Próximo passo claro</strong><p>Todo atendimento termina com ação, responsável e timing definidos.</p></div></section>
           </div>
@@ -3290,7 +3430,7 @@ export default function Home() {
 
         {section === "control" && (
           <div className="page-content">
-            <div className="section-intro control-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> CONTROLE COMERCIAL</span><h1>Nada fica solto.<br /><em>Tudo tem próximo passo.</em></h1><p>Use este quadro para organizar os atendimentos da sua conta. A planilha oficial continua sendo atualizada somente quando você pedir.</p></div><div className="control-total"><strong>20</strong><span>orçamentos de referência</span><small>10 oficiais · 10 incompletos</small></div></div>
+            <div className="section-intro control-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> CONTROLE COMERCIAL</span><h1>Nada fica solto.<br /><em>Tudo tem próximo passo.</em></h1><p>Use este quadro para organizar os atendimentos da sua conta. A planilha oficial continua sendo atualizada somente quando você pedir.</p></div><div className="control-total"><strong>{portfolioCount}</strong><span>orçamentos informados</span><small>{officialQuoteCount} oficiais · {incompleteQuoteCount} incompletos</small></div></div>
             <section className="control-rules"><div><span className="rule-number">01</span><strong>Número imutável</strong><p>O oficial não muda.</p></div><div><span className="rule-number">02</span><strong>Um status principal</strong><p>Sem duplicidade de cobrança.</p></div><div><span className="rule-number">03</span><strong>Histórico separado</strong><p>Encerrado não volta sozinho.</p></div><div><span className="rule-number">04</span><strong>Valor exato</strong><p>Centavos preservados.</p></div></section>
             <section className="panel add-followup"><div><span className="section-kicker">NOVA PENDÊNCIA LOCAL</span><h2>Registrar sem perder tempo</h2></div><form onSubmit={addFollowUp}><input value={newClient} onChange={(event) => setNewClient(event.target.value)} placeholder="Cliente / orçamento" aria-label="Cliente ou orçamento" /><input value={newNext} onChange={(event) => setNewNext(event.target.value)} placeholder="Próxima ação" aria-label="Próxima ação" /><select value={newStatus} onChange={(event) => setNewStatus(event.target.value)} aria-label="Status">{statusOptions.map((status) => <option key={status}>{status}</option>)}</select><select value={newPriority} onChange={(event) => setNewPriority(event.target.value as Priority)} aria-label="Prioridade"><option>Alta</option><option>Média</option><option>Baixa</option></select><button className="button dark" type="submit">Adicionar <span>+</span></button></form></section>
             <section className="board-heading"><div><span className="section-kicker">QUADRO DE AÇÃO</span><h2>O que merece atenção</h2></div><select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value)} aria-label="Filtrar status"><option>Todos</option>{statusOptions.map((status) => <option key={status}>{status}</option>)}</select></section>
@@ -3303,7 +3443,7 @@ export default function Home() {
           <div className="page-content">
             <div className="section-intro management-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> GESTÃO SEM EXCESSO</span><h1>Melhore o processo,<br /><em>não só o resultado.</em></h1><p>Gestão é saber onde a venda travou, quem precisa de ação e qual comportamento repetir amanhã.</p></div><div className="management-level"><span>MODELO</span><strong>4 níveis</strong><small>rotina · dados · decisão · melhoria</small></div></div>
             <section className="level-cards"><article><span>01 · BASE</span><h3>Organizar</h3><p>Cliente, número, valor, status, responsável e próxima ação.</p></article><article><span>02 · RITMO</span><h3>Acompanhar</h3><p>Retornos em timing e pendências que não ficam invisíveis.</p></article><article><span>03 · DECISÃO</span><h3>Priorizar</h3><p>Tempo no que tem medida, necessidade e decisão possível.</p></article><article><span>04 · MELHORAR</span><h3>Aprender</h3><p>Registrar objeções e repetir os argumentos que funcionam.</p></article></section>
-            <section className="management-grid"><article className="panel metrics-panel"><div className="panel-heading"><div><span className="section-kicker">PAINEL DE INDICADORES</span><h2>Coloque os números do dia</h2></div><span className="metric-calendar">⌗</span></div><div className="metric-inputs"><label><span>Novos contatos</span><input type="number" min="0" step="1" value={metrics.leads} onChange={(event) => updateMetric("leads", event.target.value)} /></label><label><span>Orçamentos</span><input type="number" min="0" step="1" value={metrics.quotes} onChange={(event) => updateMetric("quotes", event.target.value)} /></label><label><span>Retornos feitos</span><input type="number" min="0" step="1" value={metrics.followups} onChange={(event) => updateMetric("followups", event.target.value)} /></label><label><span>Vendas fechadas</span><input type="number" min="0" step="1" value={metrics.closed} onChange={(event) => updateMetric("closed", event.target.value)} /></label></div><div className="metric-results"><div><strong>{formatPercent(metricsConversion)}</strong><span>conversão de orçamento</span></div><div><strong>{formatPercent(metricsReturn)}</strong><span>taxa de retorno</span></div><div><strong>{metrics.ticket ? `R$ ${metrics.ticket.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}</strong><span>ticket médio informado</span></div></div><label className="ticket-input"><span>Ticket médio (opcional)</span><input type="number" min="0" step="0.01" value={metrics.ticket || ""} onChange={(event) => updateMetric("ticket", event.target.value)} placeholder="R$" /></label></article><article className="panel daily-panel"><div className="panel-heading"><div><span className="section-kicker">ROTINA DIÁRIA</span><h2>Feche o ciclo</h2></div><span className="daily-progress">{dailyDone.length}/4</span></div><div className="daily-list">{dailyChecks.map((check) => <label className={`daily-row ${dailyDone.includes(check.id) ? "done" : ""}`} key={check.id}><input type="checkbox" checked={dailyDone.includes(check.id)} onChange={() => toggleDaily(check.id)} /><span className="fake-checkbox">✓</span><span><strong>{check.title}</strong><small>{check.description}</small></span></label>)}</div><div className="daily-footer"><span>Consistência &gt; memória</span><div className="mini-progress"><span style={{ width: `${(dailyDone.length / dailyChecks.length) * 100}%` }} /></div></div></article></section>
+            <section className="management-grid"><article className="panel metrics-panel"><div className="panel-heading"><div><span className="section-kicker">PAINEL DE INDICADORES</span><h2>Coloque os números do dia</h2></div><span className="metric-calendar">⌗</span></div><div className="metric-inputs"><label><span>Novos contatos</span><input type="number" min="0" step="1" value={metrics.leads} onChange={(event) => updateMetric("leads", event.target.value)} /></label><label><span>Orçamentos</span><input type="number" min="0" step="1" value={metrics.quotes} onChange={(event) => updateMetric("quotes", event.target.value)} /></label><label><span>Com número oficial</span><input type="number" min="0" step="1" value={metrics.officialQuotes} onChange={(event) => updateMetric("officialQuotes", event.target.value)} /></label><label><span>Incompletos / sem número</span><input type="number" min="0" step="1" value={metrics.incompleteQuotes} onChange={(event) => updateMetric("incompleteQuotes", event.target.value)} /></label><label><span>Retornos feitos</span><input type="number" min="0" step="1" value={metrics.followups} onChange={(event) => updateMetric("followups", event.target.value)} /></label><label><span>Vendas fechadas</span><input type="number" min="0" step="1" value={metrics.closed} onChange={(event) => updateMetric("closed", event.target.value)} /></label></div><div className="metric-results"><div><strong>{formatPercent(metricsConversion)}</strong><span>conversão de orçamento</span></div><div><strong>{formatPercent(metricsReturn)}</strong><span>taxa de retorno</span></div><div><strong>{metrics.ticket ? `R$ ${metrics.ticket.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}</strong><span>ticket médio informado</span></div></div><label className="ticket-input"><span>Ticket médio (opcional)</span><input type="number" min="0" step="0.01" value={metrics.ticket || ""} onChange={(event) => updateMetric("ticket", event.target.value)} placeholder="R$" /></label></article><article className="panel daily-panel"><div className="panel-heading"><div><span className="section-kicker">ROTINA DIÁRIA</span><h2>Feche o ciclo</h2></div><span className="daily-progress">{dailyDone.length}/4</span></div><div className="daily-list">{dailyChecks.map((check) => <label className={`daily-row ${dailyDone.includes(check.id) ? "done" : ""}`} key={check.id}><input type="checkbox" checked={dailyDone.includes(check.id)} onChange={() => toggleDaily(check.id)} /><span className="fake-checkbox">✓</span><span><strong>{check.title}</strong><small>{check.description}</small></span></label>)}</div><div className="daily-footer"><span>Consistência &gt; memória</span><div className="mini-progress"><span style={{ width: `${(dailyDone.length / dailyChecks.length) * 100}%` }} /></div></div></article></section>
             <section className="management-callout"><span className="callout-icon">↗</span><div><span className="section-kicker">VISÃO DE GESTOR</span><h2>O melhor atendimento é aquele que deixa o próximo atendimento mais fácil.</h2><p>Use as objeções, dúvidas e medidas que aparecem todos os dias para enriquecer o roteiro e o catálogo. Se uma informação não estiver confirmada, preserve a dúvida até a fonte correta.</p></div><button className="button ghost" onClick={() => navigate("catalog")}>Voltar ao catálogo <span>→</span></button></section>
           </div>
         )}

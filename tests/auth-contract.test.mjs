@@ -146,3 +146,60 @@ test("employee authentication UI stays separate from the guide workspace", async
   assert.match(authSource, /export function AuthScreen/);
   assert.match(authSource, /className="auth-shell"/);
 });
+
+test("employee learning metric is stored with the training progress", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(source, /scoreHistory: number\[\]/);
+  assert.match(source, /skillHistory: TrainingSkillScores\[\]/);
+  assert.match(source, /scoreHistory: \[\.\.\.current\.scoreHistory, score\]/);
+  assert.match(source, /ÍNDICE DE APRENDIZADO/);
+  assert.match(source, /learningMetric/);
+  assert.match(source, /localStorage\.setItem\(scopedStorageKey\(authUser\.id/);
+});
+
+test("new employee workspaces start empty and counters are account-scoped", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(source, /const defaultFollowUps: LocalFollowUp\[\] = \[\];/);
+  assert.match(source, /quotes: 0/);
+  assert.match(source, /officialQuotes: 0/);
+  assert.match(source, /incompleteQuotes: 0/);
+  assert.match(source, /normalizeMetrics/);
+  assert.match(source, /portfolioCount/);
+  assert.doesNotMatch(source, /LEGACY_MIGRATION_KEY/);
+  assert.doesNotMatch(source, /<strong>20<\/strong><small>orçamentos na agenda/);
+});
+
+test("AI coach uses the round and an explicit scoring rubric", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../app/api/coach/route.ts", import.meta.url), "utf8");
+  assert.match(source, /turn\?: number/);
+  assert.match(source, /Rubrica da nota/);
+  assert.match(source, /Rodada:/);
+  assert.match(source, /não dê nota alta apenas porque a mensagem parece educada/);
+});
+
+test("AI coach exposes professional competency feedback and safe output limits", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../app/api/coach/route.ts", import.meta.url), "utf8");
+  assert.match(source, /skillScores/);
+  assert.match(source, /coachQuestion/);
+  assert.match(source, /retryGuide/);
+  assert.match(source, /cleanText/);
+  assert.match(source, /text:\s*\{\s*format:/s);
+  assert.match(source, /type: "json_schema"/);
+  assert.match(source, /calculateCoachScore/);
+  assert.match(source, /max_output_tokens: 800/);
+});
+
+test("coach endpoint rejects unauthenticated requests with JSON", async () => {
+  const worker = await loadWorker();
+  const result = await requestJson(worker, "/api/coach", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sellerMessage: "Olá", scenario: { title: "Teste" } }),
+  });
+  assert.equal(result.response.status, 401);
+  assert.equal(result.body.error, "Faça login para usar o treinador.");
+});
