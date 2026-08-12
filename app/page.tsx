@@ -1931,6 +1931,7 @@ function AuthScreen({
             </label>
           )}
           {error && <div className="auth-error" role="alert">{error}</div>}
+        {notice && <div className="account-notice" role="status">✓ {notice}</div>}
           <button className="button primary auth-submit" type="submit" disabled={busy}>
             {busy ? "Aguarde…" : isRegister ? "Criar cadastro" : "Entrar no guia"}
             {!busy && <span>→</span>}
@@ -1948,6 +1949,26 @@ type AccountRecord = EmployeeUser & {
   dataUpdatedAt: string | null;
 };
 
+type AccountEditorState = {
+  id: number | null;
+  displayName: string;
+  username: string;
+  branch: EmployeeUser["branch"];
+  password: string;
+  confirmPassword: string;
+};
+
+function blankAccountEditor(id: number | null = null): AccountEditorState {
+  return {
+    id,
+    displayName: "",
+    username: "",
+    branch: "Araraquara",
+    password: "",
+    confirmPassword: "",
+  };
+}
+
 function formatAccountDate(value: string | null) {
   if (!value) return "Ainda não usado";
   const date = new Date(value);
@@ -1959,9 +1980,13 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
   const [accounts, setAccounts] = useState<AccountRecord[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<AccountRecord | null>(null);
   const [selectedState, setSelectedState] = useState<PersistedGuideState | null>(null);
+  const [editor, setEditor] = useState<AccountEditorState | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [editorBusy, setEditorBusy] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   async function loadAccounts() {
     setLoading(true);
@@ -2000,6 +2025,85 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
     }
   }
 
+  function startCreate() {
+    setError("");
+    setNotice("");
+    setSelectedAccount(null);
+    setSelectedState(null);
+    setEditor(blankAccountEditor());
+  }
+
+  function startEdit(account: AccountRecord) {
+    setError("");
+    setNotice("");
+    setEditor({ id: account.id, displayName: account.displayName, username: account.username, branch: account.branch, password: "", confirmPassword: "" });
+  }
+
+  function closeEditor() {
+    if (editorBusy) return;
+    setEditor(null);
+  }
+
+  async function saveAccount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editor) return;
+    setError("");
+    setNotice("");
+    if (editor.password !== editor.confirmPassword) {
+      setError("As senhas não coincidem.");
+      return;
+    }
+    if (editor.id === null && editor.password.length < 6) {
+      setError("A senha deve ter pelo menos 6 caracteres.");
+      return;
+    }
+
+    setEditorBusy(true);
+    try {
+      const endpoint = editor.id === null ? "/api/admin/users" : `/api/admin/users/${editor.id}`;
+      const response = await apiFetch(endpoint, {
+        method: editor.id === null ? "POST" : "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: editor.displayName, username: editor.username, branch: editor.branch, password: editor.password }),
+      });
+      const payload = await readResponseJson<{ user?: AccountRecord; error?: string }>(response);
+      if (!response.ok || !payload.user) throw new Error(payload.error || "Não foi possível salvar o funcionário.");
+      const wasNew = editor.id === null;
+      setEditor(null);
+      setSelectedAccount(null);
+      setSelectedState(null);
+      await loadAccounts();
+      setNotice(wasNew ? "Funcionário criado com sucesso." : "Perfil atualizado com sucesso.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Não foi possível salvar o funcionário.");
+    } finally {
+      setEditorBusy(false);
+    }
+  }
+
+  async function deleteAccount(account: AccountRecord) {
+    if (!window.confirm(`Apagar o perfil de ${account.displayName}? Os registros e o acesso dessa conta também serão removidos.`)) return;
+    setError("");
+    setNotice("");
+    setDeletingId(account.id);
+    try {
+      const response = await apiFetch(`/api/admin/users/${account.id}`, { method: "DELETE" });
+      const payload = await readResponseJson<{ error?: string }>(response);
+      if (!response.ok) throw new Error(payload.error || "Não foi possível apagar o funcionário.");
+      if (selectedAccount?.id === account.id) {
+        setSelectedAccount(null);
+        setSelectedState(null);
+      }
+      if (editor?.id === account.id) setEditor(null);
+      await loadAccounts();
+      setNotice("Funcionário apagado com sucesso.");
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Não foi possível apagar o funcionário.");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   const stateEntries = selectedState ? Object.entries(selectedState).filter(([, value]) => value !== undefined && value !== null) : [];
 
   return (
@@ -2014,18 +2118,20 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
             </div>
           </div>
           <div className="account-actions">
+            <button className="button primary account-new" type="button" onClick={startCreate}>Novo funcionário <span>+</span></button>
             <button className="button ghost" type="button" onClick={() => void loadAccounts()} disabled={loading}>Atualizar</button>
             <button className="logout-button account-logout" type="button" onClick={() => void onLogout()}>Sair</button>
           </div>
         </header>
 
         <div className="account-heading">
-          <span className="section-kicker">CONTAS CADASTRADAS</span>
-          <h1 id="accounts-title">Acessos salvos.</h1>
-          <p>Consulte os funcionários e abra os registros gravados em cada conta.</p>
+          <span className="section-kicker">GESTÃO DE FUNCIONÁRIOS</span>
+          <h1 id="accounts-title">Perfis sob controle.</h1>
+          <p>Crie, edite ou apague perfis e consulte os registros separados de cada funcionário.</p>
         </div>
 
         {error && <div className="auth-error" role="alert">{error}</div>}
+        {notice && <div className="account-notice" role="status">✓ {notice}</div>}
 
         {loading ? (
           <div className="account-empty" aria-live="polite">Carregando contas…</div>
@@ -2048,10 +2154,35 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
                   <small>Registros</small>
                   <span>{account.dataUpdatedAt ? formatAccountDate(account.dataUpdatedAt) : "Sem dados"}</span>
                 </div>
-                <button className="account-open" type="button" onClick={() => void openAccount(account)}>{selectedAccount?.id === account.id ? "Atualizar" : "Abrir dados"} <span>→</span></button>
+                <div className="account-row-actions">
+                  <button className="account-open" type="button" onClick={() => void openAccount(account)}>{selectedAccount?.id === account.id ? "Atualizar" : "Abrir dados"} <span>→</span></button>
+                  <button className="account-edit" type="button" onClick={() => startEdit(account)}>Editar</button>
+                  <button className="account-delete" type="button" onClick={() => void deleteAccount(account)} disabled={deletingId === account.id}>{deletingId === account.id ? "Apagando…" : "Apagar"}</button>
+                </div>
               </article>
             ))}
           </div>
+        )}
+
+        {editor && (
+          <section className="account-editor" aria-labelledby="account-editor-title">
+            <div className="account-detail-head">
+              <div>
+                <span className="section-kicker">{editor.id === null ? "NOVO FUNCIONÁRIO" : "EDITAR PERFIL"}</span>
+                <h2 id="account-editor-title">{editor.id === null ? "Criar acesso" : "Atualizar dados"}</h2>
+                <p>{editor.id === null ? "O perfil já ficará pronto para entrar no guia." : "Deixe a senha em branco para mantê-la como está."}</p>
+              </div>
+              <button className="text-button" type="button" onClick={closeEditor} disabled={editorBusy}>Fechar <span>×</span></button>
+            </div>
+            <form className="account-editor-form" onSubmit={saveAccount}>
+              <label><span>Nome completo</span><input value={editor.displayName} onChange={(event) => setEditor((current) => current ? { ...current, displayName: event.target.value } : current)} autoComplete="name" required /></label>
+              <label><span>Usuário</span><input value={editor.username} onChange={(event) => setEditor((current) => current ? { ...current, username: event.target.value } : current)} autoComplete="username" required /></label>
+              <label><span>Filial</span><select value={editor.branch} onChange={(event) => setEditor((current) => current ? { ...current, branch: event.target.value as EmployeeUser["branch"] } : current)}><option value="Araraquara">Araraquara</option><option value="São Carlos">São Carlos</option></select></label>
+              <label><span>{editor.id === null ? "Senha" : "Nova senha (opcional)"}</span><input type="password" value={editor.password} onChange={(event) => setEditor((current) => current ? { ...current, password: event.target.value } : current)} placeholder={editor.id === null ? "Mínimo de 6 caracteres" : "Deixe em branco para manter"} autoComplete="new-password" required={editor.id === null} /></label>
+              <label><span>Confirmar senha</span><input type="password" value={editor.confirmPassword} onChange={(event) => setEditor((current) => current ? { ...current, confirmPassword: event.target.value } : current)} placeholder="Repita a senha" autoComplete="new-password" required={editor.id === null || Boolean(editor.password)} /></label>
+              <div className="account-editor-actions"><button className="button ghost account-cancel" type="button" onClick={closeEditor} disabled={editorBusy}>Cancelar</button><button className="button primary" type="submit" disabled={editorBusy}>{editorBusy ? "Salvando…" : editor.id === null ? "Criar funcionário" : "Salvar alterações"}<span>→</span></button></div>
+            </form>
+          </section>
         )}
 
         {selectedAccount && (

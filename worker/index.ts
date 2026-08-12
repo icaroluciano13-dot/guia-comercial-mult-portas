@@ -40,6 +40,27 @@ function withCors(request: Request, response: Response) {
   });
 }
 
+const ALLOWED_CORS_ORIGINS = new Set([
+  "https://icaroluciano13-dot.github.io",
+]);
+
+function withCors(request: Request, response: Response) {
+  const origin = request.headers.get("Origin");
+  if (!origin || !ALLOWED_CORS_ORIGINS.has(origin)) return response;
+
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", origin);
+  headers.set("Access-Control-Allow-Credentials", "true");
+  headers.set("Access-Control-Allow-Headers", "Content-Type");
+  headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  headers.set("Vary", headers.get("Vary") ? `${headers.get("Vary")}, Origin` : "Origin");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 // Image security config. SVG sources with .svg extension auto-skip the
 // optimization endpoint on the client side (served directly, no proxy).
 // To route SVGs through the optimizer (with security headers), set

@@ -638,3 +638,32 @@ h1 em { color: #cba66d; font-style: normal; }
   .account-open { grid-column: 2 / -1; justify-self: start; padding-left: 0; border-left: 0; }
   .account-state-grid { grid-template-columns: 1fr; }
 }
+
+/* account-admin-crud */
+.account-new span { margin-left: 5px; font-size: 15px; }
+.account-notice { margin-top: 18px; padding: 10px 11px; border: 1px solid #c8ded0; border-radius: 8px; color: #426b54; background: #f2faf4; font-size: 10px; line-height: 1.45; }
+.account-row { grid-template-columns: 38px minmax(170px, 1.3fr) minmax(130px, .8fr) minmax(130px, .8fr) minmax(240px, auto); }
+.account-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+.account-row-actions button { font-size: 10px; font-weight: 800; white-space: nowrap; }
+.account-edit, .account-delete { padding: 7px 9px; border: 1px solid #d7dfe1; border-radius: 7px; color: #66747b; background: #fff; }
+.account-edit:hover { border-color: #b88d54; color: #8f6a3b; }
+.account-delete { border-color: #e7ccc7; color: #9a5b50; }
+.account-delete:hover { border-color: #c8897c; background: #fff5f2; }
+.account-delete:disabled { cursor: wait; opacity: .6; }
+.account-editor { margin-top: 22px; padding: 22px; border: 1px solid #decba8; border-radius: 14px; background: #fffdf8; }
+.account-editor-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 20px; }
+.account-editor-form label { display: grid; gap: 6px; }
+.account-editor-form label span { color: #67747a; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.account-editor-form input, .account-editor-form select { min-height: 42px; padding: 0 12px; border: 1px solid #d5dfe2; border-radius: 9px; color: #445159; background: #fff; font: inherit; font-size: 12px; outline: none; }
+.account-editor-form input:focus, .account-editor-form select:focus { border-color: #b88d54; box-shadow: 0 0 0 3px rgba(184,141,84,.12); }
+.account-editor-actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; grid-column: 1 / -1; padding-top: 4px; }
+.account-cancel { border-color: #aab5b9; color: #647179; background: transparent; }
+@media (max-width: 760px) {
+  .account-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+  .account-row { grid-template-columns: 35px minmax(0, 1fr) auto; }
+  .account-row-actions { grid-column: 2 / -1; justify-content: flex-start; flex-wrap: wrap; }
+  .account-open { justify-self: start; padding-left: 0; border-left: 0; }
+  .account-editor { padding: 17px 14px; }
+  .account-editor-form { grid-template-columns: 1fr; }
+  .account-editor-actions { grid-column: auto; justify-content: stretch; flex-direction: column-reverse; align-items: stretch; }
+}
