@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { strFromU8, unzipSync } from "fflate";
+import {
+  availableDalcomadKitValues,
+  dalcomadKitCombinations,
+  isKnownDalcomadKitCombination,
+  normalizeDalcomadKitSelection,
+} from "../app/lib/dalcomad-kit.mjs";
 import { createWorkbookArchive, downloadWorkbook } from "../app/lib/xlsx-export.mjs";
 
 test("Excel export is valid OOXML, keeps numeric prices and neutralizes formula text", () => {
@@ -127,22 +133,55 @@ test("Excel download keeps the user click synchronous and exposes the correct fi
   }
 });
 
-test("Dalcomad request exposes only Kit Porta combinations from the approved list", async () => {
+test("Dalcomad request uses the exact line, finish and color combinations from the sample boards", () => {
+  assert.deepEqual(dalcomadKitCombinations.map(({ line, finish, color }) => [line, finish, color]), [
+    ["ECO", "PET/PVC TX", "CINZA URBAN"],
+    ["ECO", "PET/PVC TX", "BRANCO DIAMANTE"],
+    ["ECO", "PET/PVC TX", "CURUPIXA"],
+    ["STANDART", "MELAMÍNICO", "UNI WHITE"],
+    ["STANDART", "MELAMÍNICO", "FREIJO"],
+    ["STANDART", "MELAMÍNICO", "CURUPIXA"],
+    ["SENSE", "RENOLIT", "BLACK SP"],
+    ["SENSE", "RENOLIT", "CINZA GREY"],
+    ["SENSE", "RENOLIT", "BRANCO POLAR"],
+    ["SENSE", "RENOLIT", "SIRUS CREAM"],
+  ]);
+  assert.deepEqual(availableDalcomadKitValues("color", { line: "ECO", finish: "PET/PVC TX" }), ["CINZA URBAN", "BRANCO DIAMANTE", "CURUPIXA"]);
+  assert.deepEqual(availableDalcomadKitValues("finish", { line: "SENSE" }), ["RENOLIT"]);
+  assert.equal(isKnownDalcomadKitCombination({ line: "ECO", finish: "PET/PVC TX", color: "CINZA URBAN" }), true);
+  assert.equal(isKnownDalcomadKitCombination({ line: "ECO", finish: "RENOLIT", color: "BLACK SP" }), false);
+});
+
+test("Dalcomad request migrates earlier spellings into the photographed combinations", () => {
+  assert.deepEqual(normalizeDalcomadKitSelection({ line: "STANDER", finish: "MELAMINICO", color: "FREIJÓ" }), {
+    line: "STANDART",
+    finish: "MELAMÍNICO",
+    color: "FREIJO",
+  });
+  assert.deepEqual(normalizeDalcomadKitSelection({ line: "SENCE", finish: "RENOLIT", color: "PRETO" }), {
+    line: "SENSE",
+    finish: "RENOLIT",
+    color: "BLACK SP",
+  });
+  assert.deepEqual(normalizeDalcomadKitSelection({ line: "ECO", finish: "PET", color: "BRANCO" }), {
+    line: "ECO",
+    finish: "PET/PVC TX",
+    color: "BRANCO DIAMANTE",
+  });
+});
+
+test("Dalcomad request keeps Kit Porta and ABRIR fixed in the interface and export", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-  const options = source.slice(source.indexOf("const dalcomadKitColors"), source.indexOf("const factoryWizardSteps"));
   const wizard = source.slice(source.indexOf("const factoryWizardSteps"), source.indexOf("const defaultFactoryItems"));
 
-  assert.match(options, /\["BRANCO", "BRANCO TX", "CINZA URBAN", "FREIJÓ", "PRETO", "MOGNO"\]/);
-  assert.match(options, /\["ECO", "STANDER", "SENCE"\]/);
-  assert.match(options, /\["PET", "MELAMÍNICO", "RENOLIT"\]/);
-  assert.match(options, /descriptions: \["KIT PORTA"\]/);
-  assert.match(options, /openings: \["ABRIR"\]/);
-  assert.doesNotMatch(options, /CORRER|PIVOTANTE|CAMARÃO|JANELA|VENEZIANA|VITRÔ|OUTRO \/ DIGITAR|EUROMAX|CONSTRUMAX/);
   assert.doesNotMatch(wizard, /key: "description"|key: "opening"/);
+  assert.ok(wizard.indexOf('key: "line"') < wizard.indexOf('key: "finish"'));
+  assert.ok(wizard.indexOf('key: "finish"') < wizard.indexOf('key: "color"'));
   assert.match(wizard, /key: "priceWithoutLock"/);
   assert.match(wizard, /key: "priceWithLock"/);
   assert.match(source, /description: "KIT PORTA",\s+opening: "ABRIR",\s+\.\.\.factoryWizardDraft,/s);
+  assert.match(source, /dalcomadKitCombinations\.forEach\(\(item\) => listRows\.push\(\[item\.line, item\.finish, item\.color\]\)\)/);
   assert.match(source, /import \{ downloadWorkbook \} from "\.\/lib\/xlsx-export\.mjs"/);
   assert.doesNotMatch(source, /await import\("\.\/lib\/xlsx-export\.mjs"\)/);
 });

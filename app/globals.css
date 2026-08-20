@@ -467,6 +467,8 @@ h1 em { color: #cba66d; font-style: normal; }
 .factory-locator-field input::placeholder { color: #b9aea0; font-size: 10px; font-weight: 400; }
 .factory-suggestion-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 .factory-suggestion-row button { min-height: 26px; padding: 0 8px; border: 1px solid #e3d8c8; border-radius: 99px; color: #806f5a; background: rgba(255,255,255,.7); font-size: 8px; transition: .18s ease; }
+.factory-suggestion-row button.factory-color-option { display: inline-flex; align-items: center; gap: 6px; padding-left: 5px; }
+.factory-color-swatch { width: 16px; height: 16px; flex: 0 0 auto; border: 1px solid rgba(67,61,54,.24); border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,.38); }
 .factory-suggestion-row button:hover, .factory-suggestion-row button.selected { border-color: #c29b61; color: #76552e; background: #f9ecd9; }
 .factory-suggestion-row button.pending { border-style: dashed; color: #9b8160; }
 .factory-suggestion-row button.pending.selected { color: #84633d; background: #f3e7d4; }

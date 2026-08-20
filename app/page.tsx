@@ -3,6 +3,16 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthScreen } from "./auth-screen";
 import { guidedCustomerReply } from "./api/coach/customer-policy.mjs";
+import {
+  availableDalcomadKitValues,
+  dalcomadKitColors,
+  dalcomadKitCombinations,
+  dalcomadKitFinishes,
+  dalcomadKitLines,
+  dalcomadKitSwatches,
+  isKnownDalcomadKitCombination,
+  normalizeDalcomadKitSelection,
+} from "./lib/dalcomad-kit.mjs";
 import { downloadWorkbook } from "./lib/xlsx-export.mjs";
 
 type Section = "overview" | "script" | "seller" | "training" | "timing" | "messages" | "factory" | "catalog" | "control" | "management";
@@ -276,17 +286,14 @@ const factoryFieldConfig: { key: FactoryField; label: string; placeholder: strin
   { key: "opening", label: "Abertura", placeholder: "ABRIR" },
   { key: "leafMeasure", label: "Medida do kit", placeholder: "0,70 x 2,10" },
   { key: "requadro", label: "Requadro", placeholder: "18CM", listId: "factory-requadros" },
-  { key: "color", label: "Cor", placeholder: "BRANCO", listId: "factory-colors" },
+  { key: "color", label: "Cor", placeholder: "CINZA URBAN", listId: "factory-colors" },
   { key: "line", label: "Linha", placeholder: "ECO", listId: "factory-lines" },
-  { key: "finish", label: "Acabamento", placeholder: "MELAMÍNICO", listId: "factory-finishes" },
+  { key: "finish", label: "Acabamento", placeholder: "PET/PVC TX", listId: "factory-finishes" },
   { key: "filling", label: "Preenchimento", placeholder: "BOONDOOR", listId: "factory-fillings" },
   { key: "priceWithoutLock", label: "Valor sem fechadura", placeholder: "R$" },
   { key: "priceWithLock", label: "Valor com fechadura CR.", placeholder: "R$" },
 ];
 
-const dalcomadKitColors = ["BRANCO", "BRANCO TX", "CINZA URBAN", "FREIJÓ", "PRETO", "MOGNO"];
-const dalcomadKitLines = ["ECO", "STANDER", "SENCE"];
-const dalcomadKitFinishes = ["PET", "MELAMÍNICO", "RENOLIT"];
 const dalcomadKitFillings = ["BOONDOOR", "COLMÉIA"];
 const dalcomadKitRequadros = ["11CM", "14CM", "16CM", "18CM", "20CM"];
 
@@ -305,9 +312,9 @@ const factoryListOptions: Record<string, string[]> = {
 const factoryWizardSteps: { key: FactoryWizardField; label: string; title: string; hint: string; placeholder: string; listId?: string; optional?: boolean }[] = [
   { key: "leafMeasure", label: "Medida", title: "Qual é a medida do kit?", hint: "Informe a medida usada na requisição Dalcomad, por exemplo: 0,70 x 2,10.", placeholder: "0,70 x 2,10" },
   { key: "requadro", label: "Requadro", title: "Qual requadro precisa?", hint: "Use a medida confirmada do vão ou deixe como A confirmar.", placeholder: "18CM", listId: "factory-requadros" },
-  { key: "color", label: "Cor", title: "Qual cor foi escolhida?", hint: "A lista mostra somente as cores previstas para estes kits Dalcomad.", placeholder: "BRANCO", listId: "factory-colors" },
-  { key: "line", label: "Linha", title: "Qual linha do kit?", hint: "Escolha somente uma das linhas Dalcomad previstas nesta requisição.", placeholder: "ECO", listId: "factory-lines" },
-  { key: "finish", label: "Acabamento", title: "Qual acabamento do kit?", hint: "Escolha somente um acabamento aplicável ao Kit Porta Dalcomad.", placeholder: "MELAMÍNICO", listId: "factory-finishes" },
+  { key: "line", label: "Linha", title: "Qual linha do kit?", hint: "A linha define o acabamento e filtra as cores vistas nas amostras Dalcomad.", placeholder: "ECO", listId: "factory-lines" },
+  { key: "finish", label: "Acabamento", title: "Qual acabamento do kit?", hint: "Cada linha usa o acabamento correspondente mostrado na amostra.", placeholder: "PET/PVC TX", listId: "factory-finishes" },
+  { key: "color", label: "Cor", title: "Qual cor foi escolhida?", hint: "Escolha somente uma cor disponível para a linha e o acabamento selecionados.", placeholder: "CINZA URBAN", listId: "factory-colors" },
   { key: "filling", label: "Preenchimento", title: "Qual preenchimento?", hint: "Informe o preenchimento do kit ou use A confirmar.", placeholder: "BOONDOOR", listId: "factory-fillings" },
   { key: "priceWithoutLock", label: "Valor sem fechadura", title: "Qual é o valor sem fechadura?", hint: "Campo opcional. Digite o valor informado pela fábrica; nenhum cálculo é feito automaticamente.", placeholder: "R$ 0,00", optional: true },
   { key: "priceWithLock", label: "Valor com fechadura", title: "Qual é o valor com fechadura CR.?", hint: "Campo opcional. Digite o valor informado pela fábrica; nenhum cálculo é feito automaticamente.", placeholder: "R$ 0,00", optional: true },
@@ -338,7 +345,7 @@ function blankFactoryWizard(): Record<FactoryWizardField, string> {
 }
 
 // A requisição começa sem linhas. Cada linha nasce apenas quando um kit é
-// concluída no localizador e enviada para a requisição Dalcomad.
+// concluído no montador e enviado para a requisição Dalcomad.
 const defaultFactoryItems: FactoryRequestItem[] = [];
 
 function normalizeFactoryItem(value: unknown, index: number): FactoryRequestItem {
@@ -368,26 +375,26 @@ function normalizeFactoryState(value: unknown): FactoryRequestItem[] {
   const items = Array.isArray(rawItems) ? rawItems.map((item, index) => normalizeFactoryItem(item, index)) : [];
   const legacyColor = typeof objectValue?.color === "string" ? objectValue.color.trim() : "";
   const legacyFinish = typeof objectValue?.finish === "string" ? objectValue.finish.trim() : "";
-  const allowedValue = (input: string, options: string[], aliases: Record<string, string> = {}) => {
-    const normalized = input.trim().toLocaleUpperCase("pt-BR");
-    const resolved = aliases[normalized] ?? normalized;
-    return resolved === "A CONFIRMAR" ? "A confirmar" : options.includes(resolved) ? resolved : "";
-  };
   return items
     // Remove as linhas de demonstração e os espaços vazios da versão antiga.
     // Somente os kits Dalcomad enviados continuam disponíveis para exportação.
     .filter((item) => !item.id.startsWith("sample-") && item.description.trim().toLocaleUpperCase("pt-BR") === "KIT PORTA" && hasFactoryContent(item))
-    .map((item) => ({
-    ...item,
-    manufacturer: "DALCOMAD",
-    description: "KIT PORTA",
-    opening: "ABRIR",
-    requadro: allowedValue(item.requadro, dalcomadKitRequadros),
-    color: allowedValue(item.color, dalcomadKitColors) || allowedValue(legacyColor, dalcomadKitColors),
-    line: allowedValue(item.line, dalcomadKitLines, { SENSE: "SENCE" }),
-    finish: allowedValue(item.finish, dalcomadKitFinishes, { MELAMINICO: "MELAMÍNICO" }) || allowedValue(legacyFinish, dalcomadKitFinishes, { MELAMINICO: "MELAMÍNICO" }),
-    filling: allowedValue(item.filling, dalcomadKitFillings),
-    }));
+    .map((item) => {
+      const selection = normalizeDalcomadKitSelection(item, { color: legacyColor, finish: legacyFinish });
+      const normalizedRequadro = item.requadro.trim().toLocaleUpperCase("pt-BR");
+      const normalizedFilling = item.filling.trim().toLocaleUpperCase("pt-BR");
+      return {
+        ...item,
+        manufacturer: "DALCOMAD",
+        description: "KIT PORTA",
+        opening: "ABRIR",
+        requadro: normalizedRequadro === "A CONFIRMAR" ? "A confirmar" : dalcomadKitRequadros.includes(normalizedRequadro) ? normalizedRequadro : "",
+        color: selection.color,
+        line: selection.line,
+        finish: selection.finish,
+        filling: normalizedFilling === "A CONFIRMAR" ? "A confirmar" : dalcomadKitFillings.includes(normalizedFilling) ? normalizedFilling : "",
+      };
+    });
 }
 
 function hasFactoryContent(item: FactoryRequestItem) {
@@ -2783,6 +2790,10 @@ export default function Home() {
   const openActionCount = incompleteQuoteCount + followUps.filter((item) => !item.done).length;
   const filledFactoryItems = factoryItems.filter(hasFactoryContent);
   const activeFactoryWizardStep = factoryWizardSteps[factoryWizardStep];
+  const activeFactoryWizardOptions = activeFactoryWizardStep.key === "line" || activeFactoryWizardStep.key === "finish" || activeFactoryWizardStep.key === "color"
+    ? availableDalcomadKitValues(activeFactoryWizardStep.key, factoryWizardDraft)
+    : factoryWizardOptions[activeFactoryWizardStep.key];
+  const activeFactoryWizardUsesSelect = activeFactoryWizardStep.key === "line" || activeFactoryWizardStep.key === "finish" || activeFactoryWizardStep.key === "color";
   const factoryWizardProgress = ((factoryWizardStep + 1) / factoryWizardSteps.length) * 100;
   const metricsConversion = metrics.quotes ? (metrics.closed / metrics.quotes) * 100 : 0;
   const metricsReturn = metrics.quotes ? (metrics.followups / metrics.quotes) * 100 : 0;
@@ -3334,7 +3345,20 @@ export default function Home() {
   }
 
   function updateFactoryWizard(key: FactoryWizardField, value: string) {
-    setFactoryWizardDraft((current) => ({ ...current, [key]: value }));
+    setFactoryWizardDraft((current) => {
+      const next = { ...current, [key]: value };
+      if (key === "line") {
+        const finishes = value && value !== "A confirmar" ? availableDalcomadKitValues("finish", { line: value }) : [];
+        next.finish = finishes.length === 1 ? finishes[0] : "";
+        const colors = availableDalcomadKitValues("color", next);
+        if (next.color !== "A confirmar" && !colors.includes(next.color)) next.color = "";
+      }
+      if (key === "finish") {
+        const colors = availableDalcomadKitValues("color", next);
+        if (next.color !== "A confirmar" && !colors.includes(next.color)) next.color = "";
+      }
+      return next;
+    });
   }
 
   function setFactoryWizardPending() {
@@ -3363,6 +3387,11 @@ export default function Home() {
     if (missingStep >= 0) {
       setFactoryWizardStep(missingStep);
       showToast(`Conclua a etapa ${factoryWizardSteps[missingStep].label} ou marque como A confirmar`);
+      return;
+    }
+    if (!isKnownDalcomadKitCombination(factoryWizardDraft)) {
+      setFactoryWizardStep(factoryWizardSteps.findIndex(({ key }) => key === "line"));
+      showToast("Escolha uma combinação de linha, acabamento e cor das amostras Dalcomad");
       return;
     }
 
@@ -3406,19 +3435,12 @@ export default function Home() {
         parseFactoryPrice(item.priceWithoutLock),
         parseFactoryPrice(item.priceWithLock),
       ]);
-      const listRows: (string | null)[][] = [["Campo", "Valor"]];
-      const listMap: [string, string][] = [
-        ["Requadros", "requadros"],
-        ["Cores", "colors"],
-        ["Linhas", "lines"],
-        ["Acabamentos", "finishes"],
-        ["Preenchimentos", "fillings"],
-      ];
-      listMap.forEach(([label, key]) => factoryListOptions[key].forEach((option) => listRows.push([label, option])));
-      listRows.push(["Fabricante fixo", "DALCOMAD"]);
-      listRows.push(["Produto fixo", "KIT PORTA"]);
-      listRows.push(["Abertura fixa", "ABRIR"]);
-      listRows.push(["Orientação", "Esta planilha é exclusiva para montagem de Kit Porta Dalcomad. Não inclui porta de correr, folha avulsa nem opções externas à lista. Cor, linha, acabamento e preenchimento devem ser conferidos em cada kit. Valores são manuais, sem cálculo automático."]);
+      const listRows: (string | null)[][] = [["Linha", "Acabamento", "Cor da amostra"]];
+      dalcomadKitCombinations.forEach((item) => listRows.push([item.line, item.finish, item.color]));
+      listRows.push(["Requadros permitidos", factoryListOptions.requadros.join(", "), null]);
+      listRows.push(["Preenchimentos", factoryListOptions.fillings.join(", "), null]);
+      listRows.push(["Escopo fixo", "DALCOMAD · KIT PORTA · ABRIR", null]);
+      listRows.push(["Orientação", "Use somente uma combinação de linha, acabamento e cor registrada acima. Valores são manuais, sem cálculo automático.", null]);
       const fileDate = new Intl.DateTimeFormat("sv-SE").format(new Date());
       downloadWorkbook({
         filename: `Requisicao_Kit_Porta_Dalcomad_${fileDate}.xlsx`,
@@ -3436,8 +3458,8 @@ export default function Home() {
           {
             name: "Listas",
             rows: listRows,
-            columnWidths: [24, 105],
-            wrappedColumns: [1],
+            columnWidths: [24, 64, 28],
+            wrappedColumns: [1, 2],
             autoFilter: true,
           },
         ],
@@ -3788,7 +3810,7 @@ export default function Home() {
                   <strong>DALCOMAD · KIT PORTA · ABRIR</strong>
                   <p>Produto e abertura já estão definidos para todas as linhas.</p>
                 </div>
-                <div className="factory-fixed-note"><span className="mini-label">O QUE ENTRA AQUI</span><p>Somente combinações de Kit Porta Dalcomad. Porta de correr, folha avulsa e opções externas não aparecem neste montador.</p></div>
+                <div className="factory-fixed-note"><span className="mini-label">CORES DAS AMOSTRAS</span><p>ECO usa PET/PVC TX; STANDART usa Melamínico; SENSE usa Renolit. A cor é filtrada automaticamente pela linha escolhida.</p></div>
               </div>
 
               <section className="factory-locator" aria-label="Montador passo a passo do Kit Porta Dalcomad">
@@ -3803,9 +3825,9 @@ export default function Home() {
                 <div className="factory-locator-body">
                   <div className="factory-locator-copy"><span className="section-kicker">ETAPA {String(factoryWizardStep + 1).padStart(2, "0")}</span><h4>{activeFactoryWizardStep.title}</h4><p>{activeFactoryWizardStep.hint}</p></div>
                   <div className="factory-locator-input-wrap">
-                    <label className="factory-locator-field"><span>{activeFactoryWizardStep.label}{activeFactoryWizardStep.optional ? " · opcional" : ""}</span>{activeFactoryWizardStep.key === "color" ? <select className="factory-locator-select" value={factoryWizardDraft.color} onChange={(event) => updateFactoryWizard("color", event.target.value)} aria-label={`Etapa ${activeFactoryWizardStep.label}`} autoFocus><option value="">Selecione uma cor</option>{factoryListOptions.colors.map((option) => <option key={option} value={option}>{option}</option>)}<option value="A confirmar">A confirmar</option></select> : <input value={factoryWizardDraft[activeFactoryWizardStep.key]} onChange={(event) => updateFactoryWizard(activeFactoryWizardStep.key, event.target.value)} placeholder={activeFactoryWizardStep.placeholder} list={activeFactoryWizardStep.listId} inputMode={activeFactoryWizardStep.key === "priceWithoutLock" || activeFactoryWizardStep.key === "priceWithLock" ? "decimal" : undefined} autoComplete="off" aria-label={`Etapa ${activeFactoryWizardStep.label}`} autoFocus />}</label>
+                    <label className="factory-locator-field"><span>{activeFactoryWizardStep.label}{activeFactoryWizardStep.optional ? " · opcional" : ""}</span>{activeFactoryWizardUsesSelect ? <select className="factory-locator-select" value={factoryWizardDraft[activeFactoryWizardStep.key]} onChange={(event) => updateFactoryWizard(activeFactoryWizardStep.key, event.target.value)} aria-label={`Etapa ${activeFactoryWizardStep.label}`} autoFocus><option value="">Selecione {activeFactoryWizardStep.label.toLocaleLowerCase("pt-BR")}</option>{activeFactoryWizardOptions.map((option) => <option key={option} value={option}>{option}</option>)}<option value="A confirmar">A confirmar</option></select> : <input value={factoryWizardDraft[activeFactoryWizardStep.key]} onChange={(event) => updateFactoryWizard(activeFactoryWizardStep.key, event.target.value)} placeholder={activeFactoryWizardStep.placeholder} list={activeFactoryWizardStep.listId} inputMode={activeFactoryWizardStep.key === "priceWithoutLock" || activeFactoryWizardStep.key === "priceWithLock" ? "decimal" : undefined} autoComplete="off" aria-label={`Etapa ${activeFactoryWizardStep.label}`} autoFocus />}</label>
                     <div className="factory-suggestion-row" aria-label={`Sugestões para ${activeFactoryWizardStep.label}`}>
-                      {factoryWizardOptions[activeFactoryWizardStep.key].map((option) => <button key={option} type="button" className={factoryWizardDraft[activeFactoryWizardStep.key] === option ? "selected" : ""} onClick={() => updateFactoryWizard(activeFactoryWizardStep.key, option)}>{option}</button>)}
+                      {activeFactoryWizardOptions.map((option) => <button key={option} type="button" className={`${factoryWizardDraft[activeFactoryWizardStep.key] === option ? "selected" : ""}${activeFactoryWizardStep.key === "color" ? " factory-color-option" : ""}`} onClick={() => updateFactoryWizard(activeFactoryWizardStep.key, option)}>{activeFactoryWizardStep.key === "color" && <span className="factory-color-swatch" style={{ background: dalcomadKitSwatches[option] }} aria-hidden="true" />}{option}</button>)}
                       <button type="button" className={factoryWizardDraft[activeFactoryWizardStep.key] === "A confirmar" ? "selected pending" : "pending"} onClick={setFactoryWizardPending}>A confirmar</button>
                     </div>
                   </div>
@@ -3823,7 +3845,7 @@ export default function Home() {
             </section>
 
             <section className="factory-notes-grid">
-              <article className="panel factory-note-card"><span className="section-kicker">COMO USAR</span><h2>Envie um kit por vez.</h2><p>Monte o kit, confira a prévia e envie a linha para preparar a consulta. Se precisar mudar algo, ajuste as etapas antes de enviar.</p><div className="factory-note-list"><span>✓ Medida do kit e requadro</span><span>✓ Cor e linha Dalcomad</span><span>✓ Acabamento e preenchimento</span><span>✓ Valores manuais opcionais</span></div></article>
+              <article className="panel factory-note-card"><span className="section-kicker">COMO USAR</span><h2>Envie um kit por vez.</h2><p>Monte o kit, confira a prévia e envie a linha para preparar a consulta. Se precisar mudar algo, ajuste as etapas antes de enviar.</p><div className="factory-note-list"><span>✓ Medida do kit e requadro</span><span>✓ Linha define o acabamento</span><span>✓ Cor conforme a amostra</span><span>✓ Valores manuais opcionais</span></div></article>
               <article className="panel factory-note-card accent"><span className="section-kicker">ANTES DE ENCAMINHAR</span><h2>Não misture consulta e venda.</h2><p>Este arquivo é uma requisição técnica para a fábrica. Não inclui desconto, parcelas, validade ou promessa de estoque e prazo.</p><button className="button dark" type="button" onClick={() => navigate("messages")}>Voltar para mensagem comercial <span>→</span></button></article>
             </section>
 
