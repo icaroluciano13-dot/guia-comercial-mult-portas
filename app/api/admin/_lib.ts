@@ -1,8 +1,9 @@
-import { eq } from "drizzle-orm";
+import { eq, lt } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { getDb } from "../../../db";
 import { adminSessions } from "../../../db/schema";
 import { digest, getCookie, makeToken } from "../auth/_lib";
+import { isTrustedAppRequest } from "../_security";
 
 export const ADMIN_USERNAME = "admin";
 const runtimeEnv = env as unknown as { ADMIN_PASSWORD?: string };
@@ -10,22 +11,8 @@ export const ADMIN_PASSWORD = runtimeEnv.ADMIN_PASSWORD ?? "";
 export const ADMIN_COOKIE = "mp_admin_session";
 export const ADMIN_SESSION_MAX_AGE = 60 * 60 * 8;
 
-// The administrative account is restricted to the owner identity forwarded by Sites.
-const OWNER_EMAIL = "eletrovale.cont@gmail.com";
-
-export function isOwnerRequest(request: Request) {
-  return (request.headers.get("oai-authenticated-user-email") ?? "").trim().toLocaleLowerCase("pt-BR") === OWNER_EMAIL;
-}
-
-const ADMIN_ORIGINS = new Set([
-  "https://icaroluciano13-dot.github.io",
-  "https://guia-comercial-mult-portas.eletrovale-cont.chatgpt.site",
-]);
-
 export function isAdminRequest(request: Request) {
-  if (isOwnerRequest(request)) return true;
-  const origin = request.headers.get("origin");
-  return origin ? ADMIN_ORIGINS.has(origin) : false;
+  return isTrustedAppRequest(request);
 }
 
 export function adminSessionCookie(request: Request, token: string, maxAge = ADMIN_SESSION_MAX_AGE) {
@@ -51,6 +38,7 @@ export function clearedAdminCookie(request: Request) {
 export async function createAdminSession(request: Request) {
   const token = makeToken();
   const db = getDb();
+  await db.delete(adminSessions).where(lt(adminSessions.expiresAt, new Date().toISOString())).run();
   await db.insert(adminSessions).values({
     tokenHash: await digest(token),
     expiresAt: new Date(Date.now() + ADMIN_SESSION_MAX_AGE * 1000).toISOString(),
@@ -59,7 +47,7 @@ export async function createAdminSession(request: Request) {
 }
 
 export async function getAdminSession(request: Request) {
-  if (!isAdminRequest(request)) return false;
+  if (!(await isAdminRequest(request))) return false;
   const token = getCookie(request, ADMIN_COOKIE);
   if (!token) return false;
 

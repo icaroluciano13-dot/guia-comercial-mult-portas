@@ -60,26 +60,7 @@ test("auth and employee-data errors always return JSON", async () => {
   assert.match(logout.response.headers.get("set-cookie") ?? "", /mp_employee_session=;/);
 });
 
-test("GitHub Pages API preflight returns credentialed CORS headers", async () => {
-  const worker = await loadWorker();
-  const response = await worker.fetch(
-    new Request("https://guia-comercial-mult-portas.eletrovale-cont.chatgpt.site/api/auth/login", {
-      method: "OPTIONS",
-      headers: { Origin: "https://icaroluciano13-dot.github.io" },
-    }),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    executionContext(),
-  );
-
-  assert.equal(response.status, 204);
-  assert.equal(response.headers.get("access-control-allow-origin"), "https://icaroluciano13-dot.github.io");
-  assert.equal(response.headers.get("access-control-allow-credentials"), "true");
-  assert.match(response.headers.get("access-control-allow-methods") ?? "", /POST/);
-  assert.match(response.headers.get("access-control-allow-methods") ?? "", /PATCH/);
-  assert.match(response.headers.get("access-control-allow-methods") ?? "", /DELETE/);
-});
-
-test("cross-origin logout remains JSON and sets cross-site cookies", async () => {
+test("the GitHub mirror cannot call the private application API", async () => {
   const worker = await loadWorker();
   const response = await worker.fetch(
     new Request("https://guia-comercial-mult-portas.eletrovale-cont.chatgpt.site/api/auth/logout", {
@@ -90,19 +71,21 @@ test("cross-origin logout remains JSON and sets cross-site cookies", async () =>
     executionContext(),
   );
 
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get("access-control-allow-origin"), "https://icaroluciano13-dot.github.io");
-  assert.equal(response.headers.get("access-control-allow-credentials"), "true");
-  assert.match(response.headers.get("set-cookie") ?? "", /SameSite=None/);
-  assert.deepEqual(JSON.parse(await response.text()), { ok: true });
+  assert.equal(response.status, 403);
+  assert.deepEqual(JSON.parse(await response.text()), { error: "Solicitação não autorizada." });
 });
 
-test("admin policy explicitly allows GitHub Pages and keeps the password server-side", async () => {
+test("admin policy delegates trusted frontend checks and keeps the password server-side", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../app/api/admin/_lib.ts", import.meta.url), "utf8");
-  assert.match(source, /https:\/\/icaroluciano13-dot\.github\.io/);
   assert.match(source, /ADMIN_PASSWORD\s*=\s*runtimeEnv\.ADMIN_PASSWORD/);
   assert.match(source, /export function isAdminRequest/);
+  assert.match(source, /isTrustedAppRequest\(request\)/);
+  assert.doesNotMatch(source, /ADMIN_PASSWORD\s*=\s*["']admin["']/);
+
+  const securitySource = await readFile(new URL("../app/api/_security.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(securitySource, /github\.io/);
+  assert.match(securitySource, /https:\/\/guia-comercial-mult-portas\.eletrovale-cont\.chatgpt\.site/);
 });
 
 test("admin login rejects an unapproved web origin", async () => {
@@ -120,8 +103,28 @@ test("admin login rejects an unapproved web origin", async () => {
     executionContext(),
   );
 
-  assert.equal(response.status, 401);
-  assert.deepEqual(JSON.parse(await response.text()), { error: "Usuário ou senha incorretos." });
+  assert.equal(response.status, 403);
+  assert.deepEqual(JSON.parse(await response.text()), { error: "Solicitação não autorizada." });
+});
+
+test("valid admin credentials can create a session without a browser identity header", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../app/api/auth/login/route.ts", import.meta.url), "utf8");
+  assert.match(source, /constantTimeEqual\(await digest\(password\), await digest\(ADMIN_PASSWORD\)\)/);
+  assert.doesNotMatch(source, /password === ADMIN_PASSWORD/);
+  assert.doesNotMatch(source, /isOwnerRequest/);
+  assert.doesNotMatch(source, /oai-authenticated-user-email/);
+});
+
+test("switching roles clears the opposite authentication cookie", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const loginSource = await readFile(new URL("../app/api/auth/login/route.ts", import.meta.url), "utf8");
+  const registerSource = await readFile(new URL("../app/api/auth/register/route.ts", import.meta.url), "utf8");
+  const logoutSource = await readFile(new URL("../app/api/auth/logout/route.ts", import.meta.url), "utf8");
+  assert.match(loginSource, /clearedSessionCookie\(request\)/);
+  assert.match(loginSource, /clearedAdminCookie\(request\)/);
+  assert.match(registerSource, /clearedAdminCookie\(request\)/);
+  assert.match(logoutSource, /deleteAdminSession\(request\)/);
 });
 
 test("admin profile management exposes protected create, edit and delete routes", async () => {
@@ -137,6 +140,16 @@ test("admin profile management exposes protected create, edit and delete routes"
   assert.match(itemRoute, /getAdminSession/);
 });
 
+test("admin refresh action remains legible while loading", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(pageSource, /className="button account-refresh"/);
+  assert.match(pageSource, /loading \? "Atualizando…" : "Atualizar"/);
+  assert.match(styles, /\.account-refresh\s*\{[^}]*color:\s*#3f4b52[^}]*background:\s*#f4f6f6/s);
+  assert.match(styles, /\.account-refresh:disabled\s*\{[^}]*color:\s*#69767d[^}]*opacity:\s*1/s);
+});
+
 test("employee authentication UI stays separate from the guide workspace", async () => {
   const { readFile } = await import("node:fs/promises");
   const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
@@ -147,6 +160,32 @@ test("employee authentication UI stays separate from the guide workspace", async
   assert.match(authSource, /className="auth-shell"/);
 });
 
+test("employees can securely edit their own profile without reloading account data", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const profileRoute = await readFile(new URL("../app/api/auth/profile/route.ts", import.meta.url), "utf8");
+  assert.match(pageSource, /className="profile-button"/);
+  assert.match(pageSource, /await flushPendingState\(\)/);
+  assert.match(pageSource, /apiFetch\("\/api\/auth\/profile"/);
+  assert.match(pageSource, /const authUserId = authUser\?\.id \?\? null/);
+  assert.match(pageSource, /\}, \[authUserId\]\);/);
+  assert.match(profileRoute, /getSessionUser/);
+  assert.match(profileRoute, /rejectUntrustedMutation/);
+  assert.match(profileRoute, /verifyPassword/);
+  assert.match(profileRoute, /normalizeUsername/);
+  assert.match(profileRoute, /employeeSessions/);
+  assert.match(profileRoute, /createSession/);
+  assert.match(profileRoute, /Esse usuário já está cadastrado/);
+});
+
+test("employee-facing interface contains no AI product branding", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /Treino IA|feedback da IA|ChatGPT|OpenAI|GPT/);
+  assert.match(source, /Treino prático/);
+  assert.match(source, /feedback contextual/);
+});
+
 test("employee learning metric is stored with the training progress", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
@@ -155,7 +194,7 @@ test("employee learning metric is stored with the training progress", async () =
   assert.match(source, /scoreHistory: \[\.\.\.current\.scoreHistory, score\]/);
   assert.match(source, /ÍNDICE DE APRENDIZADO/);
   assert.match(source, /learningMetric/);
-  assert.match(source, /localStorage\.setItem\(scopedStorageKey\(authUser\.id/);
+  assert.match(source, /writeScopedLocalState\(authUser\.id/);
 });
 
 test("new employee workspaces start empty and counters are account-scoped", async () => {
@@ -187,10 +226,27 @@ test("AI coach exposes professional competency feedback and safe output limits",
   assert.match(source, /coachQuestion/);
   assert.match(source, /retryGuide/);
   assert.match(source, /cleanText/);
-  assert.match(source, /text:\s*\{\s*format:/s);
+  assert.match(source, /format:\s*\{\s*type: "json_schema"/s);
   assert.match(source, /type: "json_schema"/);
   assert.match(source, /calculateCoachScore/);
+  assert.match(source, /CUSTOMER_ROLE_CONTRACT/);
+  assert.match(source, /sanitizeCustomerReply/);
+  const customerPolicy = await readFile(new URL("../app/api/coach/customer-policy.mjs", import.meta.url), "utf8");
+  assert.match(customerPolicy, /CUSTOMER_ROLE_LEAK_PATTERNS/);
+  assert.match(customerPolicy, /customerReplyFallback/);
+  assert.match(source, /store: false/);
   assert.match(source, /max_output_tokens: 800/);
+});
+
+test("employee data and coach payloads have bounded, defensive parsing", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const dataRoute = await readFile(new URL("../app/api/data/route.ts", import.meta.url), "utf8");
+  const coachRoute = await readFile(new URL("../app/api/coach/route.ts", import.meta.url), "utf8");
+  assert.match(dataRoute, /MAX_REQUEST_BODY_LENGTH/);
+  assert.match(dataRoute, /request\.text\(\)/);
+  assert.match(coachRoute, /MAX_COACH_BODY_LENGTH/);
+  assert.match(coachRoute, /isRecord\(parsed\)/);
+  assert.match(coachRoute, /scenarioSignals/);
 });
 
 test("coach endpoint rejects unauthenticated requests with JSON", async () => {

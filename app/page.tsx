@@ -1,7 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthScreen } from "./auth-screen";
+import { guidedCustomerReply } from "./api/coach/customer-policy.mjs";
+import { downloadWorkbook } from "./lib/xlsx-export.mjs";
 
 type Section = "overview" | "script" | "seller" | "training" | "timing" | "messages" | "factory" | "catalog" | "control" | "management";
 type BrandId = "dalcomad" | "destak" | "casmavi" | "aluan" | "brasil" | "crv" | "lucasa" | "riobras";
@@ -10,6 +12,7 @@ type TrainingLevel = "Básico" | "Intermediário" | "Avançado";
 type TrainingFilter = "Todos" | TrainingLevel;
 type QuickMessageChannel = "WhatsApp" | "Áudio";
 type QuickMessageTone = "Consultivo" | "Direto" | "Próximo";
+type SaveStatus = "idle" | "saving" | "saved" | "offline" | "error";
 
 type EmployeeUser = {
   id: number;
@@ -28,7 +31,17 @@ type AuthFormState = {
   confirmPassword: string;
 };
 
+type ProfileFormState = {
+  displayName: string;
+  username: string;
+  branch: EmployeeUser["branch"];
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+};
+
 type PersistedGuideState = {
+  schemaVersion?: unknown;
   sales?: unknown;
   timing?: unknown;
   followups?: unknown;
@@ -56,6 +69,13 @@ type TrainingStats = {
   scenarios: string[];
   scoreHistory: number[];
   skillHistory: TrainingSkillScores[];
+  scenarioStats: Record<string, {
+    attempts: number;
+    best: number;
+    lastScore: number;
+    lastPracticedAt: string | null;
+  }>;
+  lastPracticedAt: string | null;
 };
 
 type TrainingMessage = {
@@ -90,7 +110,7 @@ type TrainingSkillId = "acolhimento" | "diagnostico" | "precisao" | "valor" | "p
 type TrainingSkillScores = Record<TrainingSkillId, number>;
 
 type TrainingFeedback = {
-  mode: "ia" | "guiado";
+  mode: "contextual" | "guiado";
   score: number;
   phase: string;
   skillScores: TrainingSkillScores;
@@ -169,6 +189,33 @@ function averageSkillScores(history: TrainingSkillScores[]): TrainingSkillScores
     proximoPasso: clampTrainingScore(totals.proximoPasso / history.length),
   };
 }
+
+function emptyTrainingStats(): TrainingStats {
+  return {
+    rounds: 0,
+    best: 0,
+    scenarios: [],
+    scoreHistory: [],
+    skillHistory: [],
+    scenarioStats: {},
+    lastPracticedAt: null,
+  };
+}
+
+function normalizeScenarioStats(value: unknown): TrainingStats["scenarioStats"] {
+  if (!isTrainingRecord(value)) return {};
+  const result: TrainingStats["scenarioStats"] = {};
+  for (const [scenarioId, raw] of Object.entries(value).slice(0, 80)) {
+    if (!isTrainingRecord(raw) || ["__proto__", "prototype", "constructor"].includes(scenarioId)) continue;
+    result[scenarioId.slice(0, 80)] = {
+      attempts: Math.max(0, Math.round(Number(raw.attempts) || 0)),
+      best: clampTrainingScore(Number(raw.best)),
+      lastScore: clampTrainingScore(Number(raw.lastScore)),
+      lastPracticedAt: typeof raw.lastPracticedAt === "string" ? raw.lastPracticedAt.slice(0, 40) : null,
+    };
+  }
+  return result;
+}
 type CatalogItem = {
   id: string;
   brand: BrandId;
@@ -207,13 +254,13 @@ type FactoryRequestItem = {
 };
 
 type FactoryField = Exclude<keyof FactoryRequestItem, "id">;
-type FactoryWizardField = Exclude<FactoryField, "manufacturer" | "priceWithoutLock" | "priceWithLock">;
+type FactoryWizardField = Exclude<FactoryField, "manufacturer" | "description" | "opening">;
 
 const factoryHeaders = [
   "Fabricante",
   "Descrição",
-  "Modelo abertura",
-  "Med. Folha",
+  "Abertura",
+  "Medida do kit",
   "Requadro",
   "Cor",
   "Linha",
@@ -225,9 +272,9 @@ const factoryHeaders = [
 
 const factoryFieldConfig: { key: FactoryField; label: string; placeholder: string; listId?: string }[] = [
   { key: "manufacturer", label: "Fabricante", placeholder: "DALCOMAD", listId: "factory-manufacturers" },
-  { key: "description", label: "Descrição", placeholder: "KIT PORTA", listId: "factory-descriptions" },
-  { key: "opening", label: "Modelo abertura", placeholder: "ABRIR / CORRER", listId: "factory-openings" },
-  { key: "leafMeasure", label: "Med. Folha", placeholder: "0,70 ou 0,70 x 2,10" },
+  { key: "description", label: "Descrição", placeholder: "KIT PORTA" },
+  { key: "opening", label: "Abertura", placeholder: "ABRIR" },
+  { key: "leafMeasure", label: "Medida do kit", placeholder: "0,70 x 2,10" },
   { key: "requadro", label: "Requadro", placeholder: "18CM", listId: "factory-requadros" },
   { key: "color", label: "Cor", placeholder: "BRANCO", listId: "factory-colors" },
   { key: "line", label: "Linha", placeholder: "ECO", listId: "factory-lines" },
@@ -237,68 +284,60 @@ const factoryFieldConfig: { key: FactoryField; label: string; placeholder: strin
   { key: "priceWithLock", label: "Valor com fechadura CR.", placeholder: "R$" },
 ];
 
-const dalcomadColors = [
-  "Branco TX",
-  "Cinza Urban",
-  "Curupixá Linheiro",
-  "Freijó",
-  "Gianduia",
-  "Curupixá",
-  "Uni White (branco)",
-  "Branco",
-  "Cinza Grey",
-  "Cirus Cream",
-  "Preto",
-];
+const dalcomadKitColors = ["BRANCO", "BRANCO TX", "CINZA URBAN", "FREIJÓ", "PRETO", "MOGNO"];
+const dalcomadKitLines = ["ECO", "STANDER", "SENCE"];
+const dalcomadKitFinishes = ["PET", "MELAMÍNICO", "RENOLIT"];
+const dalcomadKitFillings = ["BOONDOOR", "COLMÉIA"];
+const dalcomadKitRequadros = ["11CM", "14CM", "16CM", "18CM", "20CM"];
 
 const factoryListOptions: Record<string, string[]> = {
   manufacturers: ["DALCOMAD"],
-  descriptions: ["KIT PORTA", "PORTA", "JANELA", "VENEZIANA", "VITRÔ", "OUTRO / DIGITAR"],
-  openings: ["ABRIR", "CORRER", "PIVOTANTE", "CAMARÃO", "OUTRO / DIGITAR"],
-  requadros: ["14CM", "16CM", "17CM", "18CM", "OUTRO / DIGITAR"],
-  colors: dalcomadColors,
-  lines: ["ECO", "STANDER", "SENCE", "SENSE", "EUROMAX", "CONSTRUMAX", "OUTRO / DIGITAR"],
-  finishes: ["PET", "MELAMÍNICO", "RENOLIT", "PINTURA", "VERNIZ", "OUTRO / DIGITAR"],
-  fillings: ["BOONDOOR", "COLMÉIA", "MACIÇA", "SARRAFEADA", "OUTRO / DIGITAR"],
+  descriptions: ["KIT PORTA"],
+  openings: ["ABRIR"],
+  requadros: dalcomadKitRequadros,
+  colors: dalcomadKitColors,
+  lines: dalcomadKitLines,
+  finishes: dalcomadKitFinishes,
+  fillings: dalcomadKitFillings,
   values: [],
 };
 
-const factoryWizardSteps: { key: FactoryWizardField; label: string; title: string; hint: string; placeholder: string; listId?: string }[] = [
-  { key: "description", label: "Produto", title: "O que você vai requisitar?", hint: "Comece dizendo se é um kit porta, uma porta ou outro item.", placeholder: "KIT PORTA", listId: "factory-descriptions" },
-  { key: "opening", label: "Abertura", title: "Como essa porta abre?", hint: "A abertura muda a composição e a consulta para a fábrica.", placeholder: "ABRIR / CORRER", listId: "factory-openings" },
-  { key: "leafMeasure", label: "Medida", title: "Qual é a medida da folha?", hint: "Digite a largura ou a medida completa, por exemplo: 0,70 x 2,10.", placeholder: "0,70 ou 0,70 x 2,10" },
+const factoryWizardSteps: { key: FactoryWizardField; label: string; title: string; hint: string; placeholder: string; listId?: string; optional?: boolean }[] = [
+  { key: "leafMeasure", label: "Medida", title: "Qual é a medida do kit?", hint: "Informe a medida usada na requisição Dalcomad, por exemplo: 0,70 x 2,10.", placeholder: "0,70 x 2,10" },
   { key: "requadro", label: "Requadro", title: "Qual requadro precisa?", hint: "Use a medida confirmada do vão ou deixe como A confirmar.", placeholder: "18CM", listId: "factory-requadros" },
-  { key: "color", label: "Cor", title: "Qual cor foi escolhida?", hint: "A cor é definida para este item, sem alterar as outras portas.", placeholder: "BRANCO", listId: "factory-colors" },
-  { key: "line", label: "Linha", title: "Qual linha deve ser consultada?", hint: "Mantenha STANDER, SENCE e SENSE separados até a confirmação correta.", placeholder: "ECO", listId: "factory-lines" },
-  { key: "finish", label: "Acabamento", title: "Qual acabamento?", hint: "Cor e acabamento são campos diferentes na requisição.", placeholder: "MELAMÍNICO", listId: "factory-finishes" },
-  { key: "filling", label: "Preenchimento", title: "Qual preenchimento?", hint: "Informe o preenchimento da folha ou use A confirmar.", placeholder: "BOONDOOR", listId: "factory-fillings" },
+  { key: "color", label: "Cor", title: "Qual cor foi escolhida?", hint: "A lista mostra somente as cores previstas para estes kits Dalcomad.", placeholder: "BRANCO", listId: "factory-colors" },
+  { key: "line", label: "Linha", title: "Qual linha do kit?", hint: "Escolha somente uma das linhas Dalcomad previstas nesta requisição.", placeholder: "ECO", listId: "factory-lines" },
+  { key: "finish", label: "Acabamento", title: "Qual acabamento do kit?", hint: "Escolha somente um acabamento aplicável ao Kit Porta Dalcomad.", placeholder: "MELAMÍNICO", listId: "factory-finishes" },
+  { key: "filling", label: "Preenchimento", title: "Qual preenchimento?", hint: "Informe o preenchimento do kit ou use A confirmar.", placeholder: "BOONDOOR", listId: "factory-fillings" },
+  { key: "priceWithoutLock", label: "Valor sem fechadura", title: "Qual é o valor sem fechadura?", hint: "Campo opcional. Digite o valor informado pela fábrica; nenhum cálculo é feito automaticamente.", placeholder: "R$ 0,00", optional: true },
+  { key: "priceWithLock", label: "Valor com fechadura", title: "Qual é o valor com fechadura CR.?", hint: "Campo opcional. Digite o valor informado pela fábrica; nenhum cálculo é feito automaticamente.", placeholder: "R$ 0,00", optional: true },
 ];
 
 const factoryWizardOptions: Record<FactoryWizardField, string[]> = {
-  description: factoryListOptions.descriptions,
-  opening: factoryListOptions.openings,
   leafMeasure: [],
   requadro: factoryListOptions.requadros,
   color: factoryListOptions.colors,
   line: factoryListOptions.lines,
   finish: factoryListOptions.finishes,
   filling: factoryListOptions.fillings,
+  priceWithoutLock: [],
+  priceWithLock: [],
 };
 
 function blankFactoryWizard(): Record<FactoryWizardField, string> {
   return {
-    description: "",
-    opening: "",
     leafMeasure: "",
     requadro: "",
     color: "",
     line: "",
     finish: "",
     filling: "",
+    priceWithoutLock: "",
+    priceWithLock: "",
   };
 }
 
-// A requisição começa sem linhas. Cada linha nasce apenas quando uma porta é
+// A requisição começa sem linhas. Cada linha nasce apenas quando um kit é
 // concluída no localizador e enviada para a requisição Dalcomad.
 const defaultFactoryItems: FactoryRequestItem[] = [];
 
@@ -329,17 +368,25 @@ function normalizeFactoryState(value: unknown): FactoryRequestItem[] {
   const items = Array.isArray(rawItems) ? rawItems.map((item, index) => normalizeFactoryItem(item, index)) : [];
   const legacyColor = typeof objectValue?.color === "string" ? objectValue.color.trim() : "";
   const legacyFinish = typeof objectValue?.finish === "string" ? objectValue.finish.trim() : "";
+  const allowedValue = (input: string, options: string[], aliases: Record<string, string> = {}) => {
+    const normalized = input.trim().toLocaleUpperCase("pt-BR");
+    const resolved = aliases[normalized] ?? normalized;
+    return resolved === "A CONFIRMAR" ? "A confirmar" : options.includes(resolved) ? resolved : "";
+  };
   return items
     // Remove as linhas de demonstração e os espaços vazios da versão antiga.
-    // Itens reais já preenchidos continuam disponíveis para edição/exportação.
-    .filter((item) => !item.id.startsWith("sample-") && hasFactoryContent(item))
+    // Somente os kits Dalcomad enviados continuam disponíveis para exportação.
+    .filter((item) => !item.id.startsWith("sample-") && item.description.trim().toLocaleUpperCase("pt-BR") === "KIT PORTA" && hasFactoryContent(item))
     .map((item) => ({
     ...item,
     manufacturer: "DALCOMAD",
-    color: dalcomadColors.includes(item.color.trim())
-      ? item.color.trim()
-      : dalcomadColors.includes(legacyColor) ? legacyColor : "",
-    finish: item.finish.trim() || legacyFinish,
+    description: "KIT PORTA",
+    opening: "ABRIR",
+    requadro: allowedValue(item.requadro, dalcomadKitRequadros),
+    color: allowedValue(item.color, dalcomadKitColors) || allowedValue(legacyColor, dalcomadKitColors),
+    line: allowedValue(item.line, dalcomadKitLines, { SENSE: "SENCE" }),
+    finish: allowedValue(item.finish, dalcomadKitFinishes, { MELAMINICO: "MELAMÍNICO" }) || allowedValue(legacyFinish, dalcomadKitFinishes, { MELAMINICO: "MELAMÍNICO" }),
+    filling: allowedValue(item.filling, dalcomadKitFillings),
     }));
 }
 
@@ -381,19 +428,8 @@ function safelyParseJson(value: string | null): unknown {
   }
 }
 
-// GitHub Pages is static, so its API requests use the functional Sites
-// deployment. The internal deployment keeps same-origin requests.
-const PUBLIC_API_ORIGIN = "https://guia-comercial-mult-portas.eletrovale-cont.chatgpt.site";
-
-function apiUrl(path: string) {
-  if (typeof window !== "undefined" && window.location.hostname.endsWith(".github.io")) {
-    return `${PUBLIC_API_ORIGIN}${path}`;
-  }
-  return path;
-}
-
 function apiFetch(path: string, init: RequestInit = {}) {
-  return fetch(apiUrl(path), { ...init, credentials: "include" });
+  return fetch(path, { ...init, credentials: "same-origin" });
 }
 
 async function readResponseJson<T>(response: Response): Promise<T> {
@@ -410,27 +446,50 @@ function readScopedLocalState(userId: number): PersistedGuideState | null {
   if (typeof window === "undefined") return null;
   const state: PersistedGuideState = {};
   let hasScopedState = false;
-  for (const key of Object.keys(STORAGE) as (keyof typeof STORAGE)[]) {
-    const value = localStorage.getItem(scopedStorageKey(userId, STORAGE[key]));
-    if (value !== null) {
-      state[key] = safelyParseJson(value);
+  try {
+    for (const key of Object.keys(STORAGE) as (keyof typeof STORAGE)[]) {
+      const value = localStorage.getItem(scopedStorageKey(userId, STORAGE[key]));
+      if (value !== null) {
+        state[key] = safelyParseJson(value);
+        hasScopedState = true;
+      }
+    }
+    const drawerChecks = localStorage.getItem(scopedStorageKey(userId, "drawer-checks-v1"));
+    if (drawerChecks !== null) {
+      state.drawerChecks = safelyParseJson(drawerChecks);
       hasScopedState = true;
     }
-  }
-  const drawerChecks = localStorage.getItem(scopedStorageKey(userId, "drawer-checks-v1"));
-  if (drawerChecks !== null) {
-    state.drawerChecks = safelyParseJson(drawerChecks);
-    hasScopedState = true;
+  } catch {
+    return null;
   }
   if (hasScopedState) return state;
   return null;
+}
+
+function writeScopedLocalState(userId: number, key: string, value: unknown) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(scopedStorageKey(userId, key), JSON.stringify(value));
+  } catch {
+    // Indexed server persistence remains the source of truth when browser storage is unavailable.
+  }
+}
+
+function clearScopedLocalState(userId: number) {
+  if (typeof window === "undefined") return;
+  try {
+    for (const key of Object.values(STORAGE)) localStorage.removeItem(scopedStorageKey(userId, key));
+    localStorage.removeItem(scopedStorageKey(userId, "drawer-checks-v1"));
+  } catch {
+    // The server remains authoritative even if browser storage is unavailable.
+  }
 }
 
 const sections: { id: Section; label: string; icon: string; description: string }[] = [
   { id: "overview", label: "Visão geral", icon: "⌂", description: "Comando do dia" },
   { id: "script", label: "Roteiro de venda", icon: "↗", description: "Do básico ao avançado" },
   { id: "seller", label: "Ser um bom vendedor", icon: "★", description: "Postura e prática" },
-  { id: "training", label: "Treino IA", icon: "✦", description: "Simule conversas" },
+  { id: "training", label: "Treino prático", icon: "✦", description: "Simule conversas" },
   { id: "timing", label: "Timing", icon: "◷", description: "Quando agir" },
   { id: "messages", label: "Mensagem rápida", icon: "✎", description: "Planeje e copie" },
   { id: "factory", label: "Requisição fábrica", icon: "▤", description: "Preencha e exporte" },
@@ -1617,6 +1676,21 @@ function normalizeMetrics(value: unknown): EmployeeMetrics {
     ticket: normalizeMetricNumber(source.ticket),
   };
 }
+
+function normalizeFollowUps(value: unknown): LocalFollowUp[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const source = item as Record<string, unknown>;
+    const client = typeof source.client === "string" ? source.client.trim().slice(0, 160) : "";
+    const next = typeof source.next === "string" ? source.next.trim().slice(0, 240) : "";
+    if (!client || !next) return [];
+    const status = typeof source.status === "string" && statusOptions.includes(source.status) ? source.status : "A confirmar";
+    const priority = source.priority === "Alta" || source.priority === "Baixa" ? source.priority : "Média";
+    const id = typeof source.id === "string" && source.id.trim() ? source.id.trim().slice(0, 80) : `saved-${index + 1}`;
+    return [{ id, client, next, status, priority, done: source.done === true }];
+  });
+}
 const dailyChecks = [
   { id: "open", title: "Abrir o dia", description: "Ver pendências por prioridade e revisar medidas que faltam." },
   { id: "quote", title: "Orçar com clareza", description: "Uma principal, uma alternativa e campos ‘A confirmar’ visíveis." },
@@ -1737,6 +1811,7 @@ type CoachSignals = {
   mentionsInstallation: boolean;
   mentionsEvidence: boolean;
   saysUncertain: boolean;
+  hasEmpathy: boolean;
 };
 
 function normalizeCoachText(value: string) {
@@ -1789,7 +1864,7 @@ function reactiveCustomerTurn(scenario: TrainingScenario, signals: CoachSignals,
       if (signals.hasEnvironment && signals.hasMeasure) return finish("Perfeito, você já me deu ambiente e medida. Essa medida é do vão acabado? A parede é de alvenaria ou drywall?", "Validar se a medida é do vão e confirmar o tipo de parede.", "Mais aberto e pronto para avançar", "Você tirou a conversa do preço e trouxe dados que permitem uma indicação mais segura.", "Confirme se a medida é do vão acabado e o tipo de parede.");
       if (signals.hasEnvironment) return finish(`É para ${signals.environment}, sim. Ainda não medi o vão; você precisa da largura e da altura para me orientar?`, "Descobrir largura e altura do vão antes de abrir preço.", "Aberto, mas ainda sem informação técnica", "Você identificou o ambiente; agora o cliente percebe que a medida é o próximo desbloqueio.", "Peça largura, altura e tipo de parede.");
       if (signals.asksPrice) return finish("Consigo te orientar, mas não quero te passar o preço de um conjunto que depois não sirva. É para qual ambiente e qual é a largura x altura do vão?", "Entender ambiente e medida antes de falar em valor.", "Objetivo e sensível a preço", "A resposta do cliente mostra que o preço veio antes do diagnóstico; uma pergunta curta destrava a conversa.", "Pergunte ambiente e medida em uma única mensagem.");
-      return finish("Certo. Para eu não te mandar opção demais, você está buscando praticidade, economia de espaço ou um acabamento específico?", "Identificar o critério de compra principal.", "Receptivo, mas ainda genérico", "O cliente ainda não revelou o critério de escolha; conduza com uma pergunta de prioridade.", "Descubra o objetivo antes de indicar modelo.");
+      return finish("Ainda estou entendendo o que preciso. Quero algo prático, que economize espaço ou tenha um acabamento específico — o que você recomenda para esse ambiente?", "Identificar o critério de compra principal.", "Receptivo, mas ainda genérico", "O cliente ainda não revelou o critério de escolha; conduza com uma pergunta de prioridade.", "Descubra o objetivo antes de indicar modelo.");
 
     case "measure-gap":
       if (signals.hasMeasure && signals.hasGuardrail) return finish("Agora sim ficou mais claro. Só preciso confirmar se essa é a medida do vão acabado — e não da folha — além do tipo de parede para verificar a compatibilidade.", "Validar medida do vão, parede e especificação do fabricante.", "Cuidadoso e colaborativo", "Você tratou a medida como parte da venda e evitou garantir encaixe sem confirmação.", "Confirme vão acabado, parede e sentido de abertura.");
@@ -1940,7 +2015,10 @@ function guidedCoach(scenario: TrainingScenario, sellerMessage: string, turn: nu
     nextMove: reactive.nextMove,
     coachQuestion: signals.hasQuestion ? "O cliente respondeu exatamente ao que você perguntou?" : "Qual pergunta única faria o cliente avançar agora?",
     retryGuide: score >= 8 ? "Repita mantendo a mesma clareza e reduza a mensagem ao essencial." : "Na próxima tentativa, priorize a competência com menor nota e termine com uma ação concreta.",
-    customerReply: reactive.customerReply,
+    // Only curated customer-role messages can reach the chat in guided mode.
+    // Reactive branches still drive the coaching analysis, but never write the
+    // customer's speech, which prevents an accidental seller-role response.
+    customerReply: guidedCustomerReply(scenario, signals),
     coachNote: reactive.coachNote,
     customerMood: reactive.customerMood,
     customerNeed: reactive.customerNeed,
@@ -1950,6 +2028,35 @@ function guidedCoach(scenario: TrainingScenario, sellerMessage: string, turn: nu
 type AccountRecord = EmployeeUser & {
   createdAt: string;
   dataUpdatedAt: string | null;
+  summary?: AccountSummary;
+};
+
+type AccountSummary = {
+  learningIndex: number;
+  averageScore: number;
+  rounds: number;
+  bestScore: number;
+  scenariosPracticed: number;
+  weakestSkill: TrainingSkillId | null;
+  lastPracticedAt: string | null;
+  quotes: number;
+  closed: number;
+  pendingFollowUps: number;
+  preparedFactoryItems: number;
+};
+
+const emptyAccountSummary: AccountSummary = {
+  learningIndex: 0,
+  averageScore: 0,
+  rounds: 0,
+  bestScore: 0,
+  scenariosPracticed: 0,
+  weakestSkill: null,
+  lastPracticedAt: null,
+  quotes: 0,
+  closed: 0,
+  pendingFollowUps: 0,
+  preparedFactoryItems: 0,
 };
 
 type AccountEditorState = {
@@ -1983,6 +2090,9 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
   const [accounts, setAccounts] = useState<AccountRecord[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<AccountRecord | null>(null);
   const [selectedState, setSelectedState] = useState<PersistedGuideState | null>(null);
+  const [selectedSummary, setSelectedSummary] = useState<AccountSummary>(emptyAccountSummary);
+  const [accountQuery, setAccountQuery] = useState("");
+  const [branchFilter, setBranchFilter] = useState<"Todas" | EmployeeUser["branch"]>("Todas");
   const [editor, setEditor] = useState<AccountEditorState | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -2014,13 +2124,15 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
   async function openAccount(account: AccountRecord) {
     setSelectedAccount(account);
     setSelectedState(null);
+    setSelectedSummary(account.summary ?? emptyAccountSummary);
     setDetailsLoading(true);
     try {
       const response = await apiFetch(`/api/admin/users/${account.id}`, { cache: "no-store" });
-      const payload = await readResponseJson<{ user?: AccountRecord; state?: PersistedGuideState | null; error?: string }>(response);
+      const payload = await readResponseJson<{ user?: AccountRecord; state?: PersistedGuideState | null; summary?: AccountSummary; error?: string }>(response);
       if (!response.ok || !payload.user) throw new Error(payload.error || "Não foi possível abrir os dados da conta.");
       setSelectedAccount(payload.user);
       setSelectedState(payload.state && typeof payload.state === "object" ? payload.state : null);
+      setSelectedSummary(payload.summary ?? payload.user.summary ?? emptyAccountSummary);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Não foi possível abrir os dados da conta.");
     } finally {
@@ -2033,6 +2145,7 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
     setNotice("");
     setSelectedAccount(null);
     setSelectedState(null);
+    setSelectedSummary(emptyAccountSummary);
     setEditor(blankAccountEditor());
   }
 
@@ -2056,8 +2169,12 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
       setError("As senhas não coincidem.");
       return;
     }
-    if (editor.id === null && editor.password.length < 6) {
-      setError("A senha deve ter pelo menos 6 caracteres.");
+    if (editor.id === null && editor.password.length < 8) {
+      setError("A senha deve ter pelo menos 8 caracteres.");
+      return;
+    }
+    if (editor.id !== null && editor.password && editor.password.length < 8) {
+      setError("A nova senha deve ter pelo menos 8 caracteres.");
       return;
     }
 
@@ -2075,6 +2192,7 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
       setEditor(null);
       setSelectedAccount(null);
       setSelectedState(null);
+      setSelectedSummary(emptyAccountSummary);
       await loadAccounts();
       setNotice(wasNew ? "Funcionário criado com sucesso." : "Perfil atualizado com sucesso.");
     } catch (saveError) {
@@ -2096,6 +2214,7 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
       if (selectedAccount?.id === account.id) {
         setSelectedAccount(null);
         setSelectedState(null);
+        setSelectedSummary(emptyAccountSummary);
       }
       if (editor?.id === account.id) setEditor(null);
       await loadAccounts();
@@ -2108,6 +2227,15 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
   }
 
   const stateEntries = selectedState ? Object.entries(selectedState).filter(([, value]) => value !== undefined && value !== null) : [];
+  const visibleAccounts = accounts.filter((account) => {
+    const query = accountQuery.trim().toLocaleLowerCase("pt-BR");
+    const matchesQuery = !query || `${account.displayName} ${account.username}`.toLocaleLowerCase("pt-BR").includes(query);
+    return matchesQuery && (branchFilter === "Todas" || account.branch === branchFilter);
+  });
+  const trainedAccounts = accounts.filter((account) => (account.summary?.rounds ?? 0) > 0);
+  const averageLearning = trainedAccounts.length
+    ? Math.round(trainedAccounts.reduce((total, account) => total + (account.summary?.learningIndex ?? 0), 0) / trainedAccounts.length)
+    : 0;
 
   return (
     <main className="account-shell">
@@ -2122,7 +2250,16 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
           </div>
           <div className="account-actions">
             <button className="button primary account-new" type="button" onClick={startCreate}>Novo funcionário <span>+</span></button>
-            <button className="button ghost" type="button" onClick={() => void loadAccounts()} disabled={loading}>Atualizar</button>
+            <button
+              className="button account-refresh"
+              type="button"
+              onClick={() => void loadAccounts()}
+              disabled={loading}
+              aria-busy={loading}
+            >
+              <span aria-hidden="true">{loading ? "…" : "↻"}</span>
+              {loading ? "Atualizando…" : "Atualizar"}
+            </button>
             <button className="logout-button account-logout" type="button" onClick={() => void onLogout()}>Sair</button>
           </div>
         </header>
@@ -2136,13 +2273,28 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
         {error && <div className="auth-error" role="alert">{error}</div>}
         {notice && <div className="account-notice" role="status">✓ {notice}</div>}
 
+        <section className="account-overview" aria-label="Resumo da equipe">
+          <div><strong>{accounts.length}</strong><span>funcionários</span><small>perfis com dados separados</small></div>
+          <div><strong>{accounts.filter((account) => account.dataUpdatedAt).length}</strong><span>contas utilizadas</span><small>com registros sincronizados</small></div>
+          <div><strong>{trainedAccounts.length}</strong><span>em treinamento</span><small>com pelo menos uma rodada</small></div>
+          <div><strong>{trainedAccounts.length ? `${averageLearning}/100` : "—"}</strong><span>aprendizado médio</span><small>somente quem já treinou</small></div>
+        </section>
+
+        <div className="account-filters">
+          <label><span>Buscar funcionário</span><input value={accountQuery} onChange={(event) => setAccountQuery(event.target.value)} placeholder="Nome ou usuário" type="search" /></label>
+          <label><span>Filial</span><select value={branchFilter} onChange={(event) => setBranchFilter(event.target.value as typeof branchFilter)}><option>Todas</option><option>Araraquara</option><option>São Carlos</option></select></label>
+          <span>{visibleAccounts.length} de {accounts.length} perfis</span>
+        </div>
+
         {loading ? (
           <div className="account-empty" aria-live="polite">Carregando contas…</div>
         ) : accounts.length === 0 ? (
           <div className="account-empty">Nenhuma conta cadastrada.</div>
+        ) : visibleAccounts.length === 0 ? (
+          <div className="account-empty">Nenhum funcionário corresponde aos filtros.</div>
         ) : (
           <div className="account-list">
-            {accounts.map((account) => (
+            {visibleAccounts.map((account) => (
               <article className={`account-row ${selectedAccount?.id === account.id ? "selected" : ""}`} key={account.id}>
                 <div className="account-avatar">{account.displayName.slice(0, 1).toUpperCase()}</div>
                 <div className="account-main">
@@ -2181,8 +2333,8 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
               <label><span>Nome completo</span><input value={editor.displayName} onChange={(event) => setEditor((current) => current ? { ...current, displayName: event.target.value } : current)} autoComplete="name" required /></label>
               <label><span>Usuário</span><input value={editor.username} onChange={(event) => setEditor((current) => current ? { ...current, username: event.target.value } : current)} autoComplete="username" required /></label>
               <label><span>Filial</span><select value={editor.branch} onChange={(event) => setEditor((current) => current ? { ...current, branch: event.target.value as EmployeeUser["branch"] } : current)}><option value="Araraquara">Araraquara</option><option value="São Carlos">São Carlos</option></select></label>
-              <label><span>{editor.id === null ? "Senha" : "Nova senha (opcional)"}</span><input type="password" value={editor.password} onChange={(event) => setEditor((current) => current ? { ...current, password: event.target.value } : current)} placeholder={editor.id === null ? "Mínimo de 6 caracteres" : "Deixe em branco para manter"} autoComplete="new-password" required={editor.id === null} /></label>
-              <label><span>Confirmar senha</span><input type="password" value={editor.confirmPassword} onChange={(event) => setEditor((current) => current ? { ...current, confirmPassword: event.target.value } : current)} placeholder="Repita a senha" autoComplete="new-password" required={editor.id === null || Boolean(editor.password)} /></label>
+              <label><span>{editor.id === null ? "Senha" : "Nova senha (opcional)"}</span><input type="password" value={editor.password} onChange={(event) => setEditor((current) => current ? { ...current, password: event.target.value } : current)} placeholder={editor.id === null ? "Mínimo de 8 caracteres" : "Deixe em branco para manter"} autoComplete="new-password" minLength={editor.id === null || editor.password ? 8 : undefined} maxLength={120} required={editor.id === null} /></label>
+              <label><span>Confirmar senha</span><input type="password" value={editor.confirmPassword} onChange={(event) => setEditor((current) => current ? { ...current, confirmPassword: event.target.value } : current)} placeholder="Repita a senha" autoComplete="new-password" minLength={editor.id === null || editor.password ? 8 : undefined} maxLength={120} required={editor.id === null || Boolean(editor.password)} /></label>
               <div className="account-editor-actions"><button className="button ghost account-cancel" type="button" onClick={closeEditor} disabled={editorBusy}>Cancelar</button><button className="button primary" type="submit" disabled={editorBusy}>{editorBusy ? "Salvando…" : editor.id === null ? "Criar funcionário" : "Salvar alterações"}<span>→</span></button></div>
             </form>
           </section>
@@ -2196,21 +2348,35 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
                 <h2>{selectedAccount.displayName}</h2>
                 <p>{selectedAccount.username} · {selectedAccount.branch}</p>
               </div>
-              <button className="text-button" type="button" onClick={() => { setSelectedAccount(null); setSelectedState(null); }}>Fechar <span>×</span></button>
+              <button className="text-button" type="button" onClick={() => { setSelectedAccount(null); setSelectedState(null); setSelectedSummary(emptyAccountSummary); }}>Fechar <span>×</span></button>
             </div>
             {detailsLoading ? (
               <div className="account-empty">Abrindo registros…</div>
-            ) : stateEntries.length === 0 ? (
-              <div className="account-empty">Esta conta ainda não possui registros salvos.</div>
             ) : (
-              <div className="account-state-grid">
-                {stateEntries.map(([key, value]) => (
-                  <article key={key}>
-                    <span>{key}</span>
-                    <pre>{JSON.stringify(value, null, 2)}</pre>
-                  </article>
-                ))}
-              </div>
+              <>
+                <div className="account-performance-grid">
+                  <article><span>Aprendizado</span><strong>{selectedSummary.learningIndex}/100</strong><small>{selectedSummary.rounds ? `${selectedSummary.rounds} rodadas · média ${selectedSummary.averageScore}/10` : "Treinamento ainda não iniciado"}</small></article>
+                  <article><span>Melhor resultado</span><strong>{selectedSummary.bestScore ? `${selectedSummary.bestScore}/10` : "—"}</strong><small>{selectedSummary.scenariosPracticed} cenários praticados</small></article>
+                  <article><span>Carteira informada</span><strong>{selectedSummary.quotes}</strong><small>{selectedSummary.closed} vendas fechadas</small></article>
+                  <article><span>Ações abertas</span><strong>{selectedSummary.pendingFollowUps}</strong><small>{selectedSummary.preparedFactoryItems} itens preparados para fábrica</small></article>
+                </div>
+                {stateEntries.length === 0 ? (
+                  <div className="account-empty">Esta conta ainda não possui registros salvos.</div>
+                ) : (
+                  <details className="account-raw-data">
+                    <summary>Ver dados técnicos da conta</summary>
+                    <p>Visualização para auditoria. Os registros continuam isolados e não são combinados com outros funcionários.</p>
+                    <div className="account-state-grid">
+                      {stateEntries.map(([key, value]) => (
+                        <article key={key}>
+                          <span>{key}</span>
+                          <pre>{JSON.stringify(value, null, 2)}</pre>
+                        </article>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </>
             )}
           </section>
         )}
@@ -2233,6 +2399,17 @@ export default function Home() {
   });
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const [profileForm, setProfileForm] = useState<ProfileFormState>({
+    displayName: "",
+    username: "",
+    branch: "Araraquara",
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
   const [section, setSection] = useState<Section>("overview");
   const [activeSalesStep, setActiveSalesStep] = useState(0);
   const [activeTrainingScenario, setActiveTrainingScenario] = useState(0);
@@ -2271,7 +2448,7 @@ export default function Home() {
   const [voiceStatus, setVoiceStatus] = useState("Pronto para treinar por áudio");
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const [trainingLevelFilter, setTrainingLevelFilter] = useState<TrainingFilter>("Todos");
-  const [trainingStats, setTrainingStats] = useState<TrainingStats>({ rounds: 0, best: 0, scenarios: [], scoreHistory: [], skillHistory: [] });
+  const [trainingStats, setTrainingStats] = useState<TrainingStats>(emptyTrainingStats);
   const [factoryItems, setFactoryItems] = useState<FactoryRequestItem[]>(defaultFactoryItems);
   const [factoryWizardStep, setFactoryWizardStep] = useState(0);
   const [factoryWizardDraft, setFactoryWizardDraft] = useState<Record<FactoryWizardField, string>>(blankFactoryWizard);
@@ -2283,6 +2460,8 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [today, setToday] = useState("30 JUL 2026");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -2290,6 +2469,62 @@ export default function Home() {
   const voiceChunksRef = useRef<Blob[]>([]);
   const voiceFinalPartsRef = useRef<string[]>([]);
   const voiceUrlsRef = useRef<string[]>([]);
+  const pendingStateRef = useRef<{ userId: number; state: PersistedGuideState } | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+  const saveInFlightRef = useRef<Promise<void> | null>(null);
+  const authUserId = authUser?.id ?? null;
+
+  const flushPendingState = useCallback(async () => {
+    const flush = async (): Promise<void> => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+
+      const pending = pendingStateRef.current;
+      if (!pending) {
+        if (saveInFlightRef.current) await saveInFlightRef.current.catch(() => undefined);
+        return;
+      }
+
+      pendingStateRef.current = null;
+      // Never let a delayed save from one employee be sent while another
+      // employee is the active session.
+      if (!authUserId || authUserId !== pending.userId) return;
+      setSaveStatus("saving");
+      const previous = saveInFlightRef.current ?? Promise.resolve();
+      const current = previous.catch(() => undefined).then(async () => {
+        const response = await apiFetch("/api/data", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state: pending.state }),
+        });
+        if (!response.ok) throw new Error("Não foi possível salvar os dados agora.");
+      });
+      saveInFlightRef.current = current;
+      let failed = false;
+      try {
+        await current;
+        setLastSavedAt(new Date());
+        setSaveStatus("saved");
+      } catch {
+        failed = true;
+        if (authUserId === pending.userId && !pendingStateRef.current) pendingStateRef.current = pending;
+        setSaveStatus(typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "error");
+      } finally {
+        if (saveInFlightRef.current === current) saveInFlightRef.current = null;
+      }
+
+      if (!failed && pendingStateRef.current) await flush();
+    };
+    await flush();
+  }, [authUserId]);
+
+  useEffect(() => {
+    const retryWhenOnline = () => { void flushPendingState(); };
+    window.addEventListener("online", retryWhenOnline);
+    return () => window.removeEventListener("online", retryWhenOnline);
+  }, [flushPendingState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2308,15 +2543,18 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!authUser) return;
+    if (!authUserId) return;
 
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       let state: PersistedGuideState | null = null;
+      let serverReadSucceeded = false;
+      let usingLocalBackup = false;
       try {
         const response = await apiFetch("/api/data", { cache: "no-store" });
         if (response.ok) {
           const payload = await readResponseJson<{ state?: unknown }>(response);
+          serverReadSucceeded = true;
           if (payload.state && typeof payload.state === "object" && !Array.isArray(payload.state)) {
             state = payload.state as PersistedGuideState;
           }
@@ -2324,7 +2562,13 @@ export default function Home() {
       } catch {
         // The browser-scoped copy below keeps the guide usable during a temporary connection issue.
       }
-      if (!state) state = readScopedLocalState(authUser.id);
+      // A successful { state: null } is a real empty account. Do not hydrate it
+      // with a stale browser copy from an older session.
+      if (!serverReadSucceeded && !state) {
+        state = readScopedLocalState(authUserId);
+        usingLocalBackup = Boolean(state);
+      }
+      if (serverReadSucceeded && !state) clearScopedLocalState(authUserId);
       if (cancelled) return;
 
       const savedSales = Array.isArray(state?.sales) ? state.sales : [];
@@ -2339,30 +2583,37 @@ export default function Home() {
 
       setDoneSales(savedSales.filter((item): item is string => typeof item === "string"));
       setDoneTiming(savedTiming.filter((item): item is string => typeof item === "string"));
-      if (savedFollowUps) setFollowUps(savedFollowUps as LocalFollowUp[]);
+      setFollowUps(Array.isArray(savedFollowUps) ? normalizeFollowUps(savedFollowUps) : []);
       setDailyDone(savedChecks.filter((item): item is string => typeof item === "string"));
-      if (savedMetrics && typeof savedMetrics === "object") setMetrics(normalizeMetrics(savedMetrics));
+      setMetrics(savedMetrics && typeof savedMetrics === "object" ? normalizeMetrics(savedMetrics) : { ...defaultMetrics });
       if (savedTraining && typeof savedTraining === "object") {
-        const training = savedTraining as { rounds?: unknown; sessions?: unknown; best?: unknown; scenarios?: unknown; scoreHistory?: unknown; skillHistory?: unknown };
+        const training = savedTraining as { rounds?: unknown; sessions?: unknown; best?: unknown; scenarios?: unknown; scoreHistory?: unknown; skillHistory?: unknown; scenarioStats?: unknown; lastPracticedAt?: unknown };
         setTrainingStats({
-          rounds: Number(training.rounds ?? training.sessions) || 0,
-          best: Number(training.best) || 0,
+          rounds: Math.max(0, Math.round(Number(training.rounds ?? training.sessions) || 0)),
+          best: clampTrainingScore(Number(training.best)),
           scenarios: Array.isArray(training.scenarios) ? training.scenarios.filter((item): item is string => typeof item === "string") : [],
           scoreHistory: Array.isArray(training.scoreHistory)
-            ? training.scoreHistory.filter((item): item is number => typeof item === "number" && Number.isFinite(item)).map((item) => Math.max(0, Math.min(10, Math.round(item)))).slice(-60)
+            ? training.scoreHistory.filter((item): item is number => typeof item === "number" && Number.isFinite(item)).map((item) => Math.max(0, Math.min(10, Math.round(item)))).slice(-120)
             : [],
           skillHistory: Array.isArray(training.skillHistory)
-            ? training.skillHistory.filter(isTrainingRecord).map((item) => normalizeSkillScores(item)).slice(-60)
+            ? training.skillHistory.filter(isTrainingRecord).map((item) => normalizeSkillScores(item)).slice(-120)
             : [],
+          scenarioStats: normalizeScenarioStats(training.scenarioStats),
+          lastPracticedAt: typeof training.lastPracticedAt === "string" ? training.lastPracticedAt.slice(0, 40) : null,
         });
-      }
-      if (savedFactory) {
-        const factory = normalizeFactoryState(savedFactory);
-        setFactoryItems(factory);
-      }
-      if (savedDrawerChecks && typeof savedDrawerChecks === "object") setDrawerChecks(savedDrawerChecks as Record<string, string[]>);
-      if (savedMessages && typeof savedMessages === "object") {
-        const planner = savedMessages as Partial<{
+      } else setTrainingStats(emptyTrainingStats());
+      setFactoryItems(savedFactory ? normalizeFactoryState(savedFactory) : []);
+      if (savedDrawerChecks && typeof savedDrawerChecks === "object" && !Array.isArray(savedDrawerChecks)) {
+        const normalizedChecks: Record<string, string[]> = {};
+        for (const [itemId, checks] of Object.entries(savedDrawerChecks).slice(0, 240)) {
+          if (Array.isArray(checks) && !["__proto__", "prototype", "constructor"].includes(itemId)) {
+            normalizedChecks[itemId] = checks.filter((item): item is string => typeof item === "string").slice(0, 40);
+          }
+        }
+        setDrawerChecks(normalizedChecks);
+      } else setDrawerChecks({});
+      const planner = savedMessages && typeof savedMessages === "object" && !Array.isArray(savedMessages)
+        ? savedMessages as Partial<{
           name: string;
           line: string;
           environment: string;
@@ -2371,22 +2622,21 @@ export default function Home() {
           channel: QuickMessageChannel;
           tone: QuickMessageTone;
           proof: { company?: boolean; quality?: boolean; guarantee?: boolean };
-        }>;
-        if (typeof planner.name === "string") setMessageName(planner.name);
-        if (typeof planner.line === "string") setMessageLine(planner.line);
-        if (typeof planner.environment === "string") setMessageEnvironment(planner.environment);
-        if (typeof planner.objective === "string") setMessageObjective(planner.objective);
-        if (typeof planner.question === "string") setMessageQuestion(planner.question);
-        if (planner.channel === "WhatsApp" || planner.channel === "Áudio") setMessageChannel(planner.channel);
-        if (planner.tone === "Consultivo" || planner.tone === "Direto" || planner.tone === "Próximo") setMessageTone(planner.tone);
-        if (planner.proof && typeof planner.proof === "object") {
-          setMessageProof({
-            company: planner.proof.company !== false,
-            quality: planner.proof.quality !== false,
-            guarantee: planner.proof.guarantee !== false,
-          });
-        }
-      }
+        }>
+        : {};
+      setMessageName(typeof planner.name === "string" ? planner.name : "");
+      setMessageLine(typeof planner.line === "string" && planner.line ? planner.line : "Kit porta pronta");
+      setMessageEnvironment(typeof planner.environment === "string" ? planner.environment : "");
+      setMessageObjective(typeof planner.objective === "string" && planner.objective ? planner.objective : "apresentar uma opção de qualidade");
+      setMessageQuestion(typeof planner.question === "string" ? planner.question : "");
+      setMessageChannel(planner.channel === "Áudio" ? "Áudio" : "WhatsApp");
+      setMessageTone(planner.tone === "Direto" || planner.tone === "Próximo" ? planner.tone : "Consultivo");
+      setMessageProof({
+        company: planner.proof?.company !== false,
+        quality: planner.proof?.quality !== false,
+        guarantee: planner.proof?.guarantee !== false,
+      });
+      setSaveStatus(usingLocalBackup ? (navigator.onLine ? "error" : "offline") : "saved");
       setToday(formatToday());
       setDataLoaded(true);
       setHydrated(true);
@@ -2395,7 +2645,7 @@ export default function Home() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [authUser]);
+  }, [authUserId]);
 
   useEffect(() => {
     const browserWindow = window as typeof window & {
@@ -2428,6 +2678,7 @@ export default function Home() {
   useEffect(() => {
     if (!authUser || !hydrated || !dataLoaded) return;
     const state: PersistedGuideState = {
+      schemaVersion: 2,
       sales: doneSales,
       timing: doneTiming,
       followups: followUps,
@@ -2437,14 +2688,14 @@ export default function Home() {
       factory: factoryItems.map((item) => ({ ...item, manufacturer: "DALCOMAD" })),
       drawerChecks,
       messages: {
-      name: messageName,
-      line: messageLine,
-      environment: messageEnvironment,
-      objective: messageObjective,
-      question: messageQuestion,
-      channel: messageChannel,
-      tone: messageTone,
-      proof: messageProof,
+        name: messageName,
+        line: messageLine,
+        environment: messageEnvironment,
+        objective: messageObjective,
+        question: messageQuestion,
+        channel: messageChannel,
+        tone: messageTone,
+        proof: messageProof,
       },
     };
 
@@ -2458,20 +2709,20 @@ export default function Home() {
       ["messages", state.messages],
       ["factory", state.factory],
     ];
-    for (const [key, value] of localEntries) localStorage.setItem(scopedStorageKey(authUser.id, STORAGE[key]), JSON.stringify(value));
-    localStorage.setItem(scopedStorageKey(authUser.id, "drawer-checks-v1"), JSON.stringify(drawerChecks));
+    for (const [key, value] of localEntries) writeScopedLocalState(authUser.id, STORAGE[key], value);
+    writeScopedLocalState(authUser.id, "drawer-checks-v1", drawerChecks);
+    pendingStateRef.current = { userId: authUser.id, state };
 
     const timer = window.setTimeout(() => {
-      apiFetch("/api/data", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state }),
-      }).catch(() => {
-        // The namespaced browser copy remains available if the connection is interrupted.
-      });
+      if (saveTimerRef.current === timer) saveTimerRef.current = null;
+      void flushPendingState();
     }, 450);
-    return () => window.clearTimeout(timer);
-  }, [authUser, dailyDone, dataLoaded, doneSales, doneTiming, drawerChecks, factoryItems, followUps, hydrated, messageChannel, messageEnvironment, messageLine, messageName, messageObjective, messageProof, messageQuestion, messageTone, metrics, trainingStats]);
+    saveTimerRef.current = timer;
+    return () => {
+      window.clearTimeout(timer);
+      if (saveTimerRef.current === timer) saveTimerRef.current = null;
+    };
+  }, [authUser, dailyDone, dataLoaded, doneSales, doneTiming, drawerChecks, factoryItems, flushPendingState, followUps, hydrated, messageChannel, messageEnvironment, messageLine, messageName, messageObjective, messageProof, messageQuestion, messageTone, metrics, trainingStats]);
 
   useEffect(() => {
     if (!selectedCatalog) return;
@@ -2486,6 +2737,23 @@ export default function Home() {
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [selectedCatalog]);
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !profileBusy) {
+        setProfileOpen(false);
+        setProfileError("");
+      }
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [profileBusy, profileOpen]);
 
   const currentBrand = brandData[brand];
   const currentTrainingScenario = trainingScenarios[activeTrainingScenario];
@@ -2531,7 +2799,29 @@ export default function Home() {
   const learningMetric = trainingScores.length
     ? Math.round((trainingAverage / 10) * 60 + scenarioCoverage * 25 + trainingConsistency * 15)
     : 0;
+  const learningStage = !trainingScores.length
+    ? "Não iniciado"
+    : learningMetric < 35
+      ? "Fundamentos"
+      : learningMetric < 60
+        ? "Em desenvolvimento"
+        : learningMetric < 80
+          ? "Consistente"
+          : "Referência";
   const averageTrainingSkills = averageSkillScores(trainingStats.skillHistory);
+  const weakestTrainingSkill = trainingStats.skillHistory.length
+    ? trainingSkillMeta.reduce((weakest, skill) => averageTrainingSkills[skill.id] < averageTrainingSkills[weakest.id] ? skill : weakest, trainingSkillMeta[0])
+    : null;
+  const masteredScenarios = Object.values(trainingStats.scenarioStats).filter((scenario) => scenario.attempts >= 2 && scenario.best >= 8).length;
+  const saveStatusLabel = saveStatus === "saving"
+    ? "Salvando…"
+    : saveStatus === "offline"
+      ? "Offline · envio pendente"
+      : saveStatus === "error"
+        ? "Sincronização pendente"
+        : saveStatus === "saved"
+          ? lastSavedAt ? `Salvo às ${lastSavedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}` : "Dados sincronizados"
+          : "Preparando dados";
   const quickMessage = useMemo(() => buildQuickMessage({
     name: messageName,
     line: messageLine,
@@ -2557,13 +2847,78 @@ export default function Home() {
     window.setTimeout(() => setToast(""), 2600);
   }
 
+  function openProfileEditor() {
+    if (!authUser) return;
+    setProfileError("");
+    setProfileForm({
+      displayName: authUser.displayName,
+      username: authUser.username,
+      branch: authUser.branch,
+      currentPassword: "",
+      newPassword: "",
+      confirmPassword: "",
+    });
+    setProfileOpen(true);
+  }
+
+  function closeProfileEditor() {
+    if (profileBusy) return;
+    setProfileOpen(false);
+    setProfileError("");
+  }
+
+  async function handleProfileSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setProfileError("");
+    if (profileForm.newPassword !== profileForm.confirmPassword) {
+      setProfileError("As novas senhas não coincidem.");
+      return;
+    }
+
+    setProfileBusy(true);
+    try {
+      await flushPendingState();
+      const response = await apiFetch("/api/auth/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          displayName: profileForm.displayName,
+          username: profileForm.username,
+          branch: profileForm.branch,
+          currentPassword: profileForm.currentPassword,
+          newPassword: profileForm.newPassword,
+        }),
+      });
+      const data = await readResponseJson<{ user?: EmployeeUser; error?: string }>(response);
+      if (!response.ok || !data.user) throw new Error(data.error || "Não foi possível atualizar seu perfil.");
+      setAuthUser(data.user);
+      setProfileOpen(false);
+      setProfileForm({
+        displayName: "",
+        username: "",
+        branch: "Araraquara",
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: "",
+      });
+      showToast("Perfil atualizado com sucesso");
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : "Não foi possível atualizar seu perfil.");
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
   function resetEmployeeWorkspace() {
+    if (isRecording) stopVoiceCapture();
+    window.speechSynthesis?.cancel();
+    if (voicePreviewUrl) discardVoiceDraft();
     setDoneSales([]);
     setDoneTiming([]);
     setFollowUps(defaultFollowUps);
     setDailyDone([]);
     setMetrics(defaultMetrics);
-    setTrainingStats({ rounds: 0, best: 0, scenarios: [], scoreHistory: [], skillHistory: [] });
+    setTrainingStats(emptyTrainingStats());
     setFactoryItems(defaultFactoryItems);
     setDrawerChecks({});
     setMessageName("");
@@ -2577,6 +2932,30 @@ export default function Home() {
     setTrainingMessages([]);
     setTrainingFeedback(null);
     setTrainingStarted(false);
+    setTrainingInputMode("voice");
+    setTrainingLevelFilter("Todos");
+    setTrainingInput("");
+    setVoiceTranscript("");
+    setVoiceInterim("");
+    setVoiceSeconds(0);
+    setVoiceStatus("Pronto para treinar por áudio");
+    setSpeakingMessageId(null);
+    setNewClient("");
+    setNewNext("");
+    setNewStatus("Aguardando retorno");
+    setNewPriority("Média");
+    setFilterStatus("Todos");
+    setFactoryWizardStep(0);
+    setFactoryWizardDraft(blankFactoryWizard());
+    setSelectedCatalog(null);
+    setCatalogSearch("");
+    setCatalogFamily("Todas");
+    setBrand("dalcomad");
+    setActiveSalesStep(0);
+    setActiveTrainingScenario(0);
+    setActiveTimingStep(0);
+    setSaveStatus("idle");
+    setLastSavedAt(null);
   }
 
   async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
@@ -2600,6 +2979,9 @@ export default function Home() {
       });
       const data = await readResponseJson<{ user?: EmployeeUser; admin?: boolean; error?: string }>(response);
       if (!response.ok || (!data.user && data.admin !== true)) throw new Error(data.error || "Não foi possível concluir o acesso.");
+      pendingStateRef.current = null;
+      if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
       setHydrated(false);
       setDataLoaded(false);
       setIsAdmin(data.admin === true);
@@ -2616,11 +2998,17 @@ export default function Home() {
   async function handleLogout() {
     setAuthBusy(true);
     try {
+      await flushPendingState();
       await apiFetch("/api/auth/logout", { method: "POST" });
     } finally {
+      pendingStateRef.current = null;
+      if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
       resetEmployeeWorkspace();
       setIsAdmin(false);
       setAuthUser(null);
+      setProfileOpen(false);
+      setProfileError("");
       setHydrated(false);
       setDataLoaded(false);
       setSection("overview");
@@ -2811,13 +3199,27 @@ export default function Home() {
   }
 
   function recordTrainingRound(score: number, scenarioId: string, skillScores: TrainingSkillScores) {
-    setTrainingStats((current) => ({
-      rounds: current.rounds + 1,
-      best: Math.max(current.best, score),
-      scenarios: current.scenarios.includes(scenarioId) ? current.scenarios : [...current.scenarios, scenarioId],
-      scoreHistory: [...current.scoreHistory, score].slice(-60),
-      skillHistory: [...current.skillHistory, skillScores].slice(-60),
-    }));
+    const practicedAt = new Date().toISOString();
+    setTrainingStats((current) => {
+      const previousScenario = current.scenarioStats[scenarioId] ?? { attempts: 0, best: 0, lastScore: 0, lastPracticedAt: null };
+      return {
+        rounds: current.rounds + 1,
+        best: Math.max(current.best, score),
+        scenarios: current.scenarios.includes(scenarioId) ? current.scenarios : [...current.scenarios, scenarioId],
+        scoreHistory: [...current.scoreHistory, score].slice(-120),
+        skillHistory: [...current.skillHistory, skillScores].slice(-120),
+        scenarioStats: {
+          ...current.scenarioStats,
+          [scenarioId]: {
+            attempts: previousScenario.attempts + 1,
+            best: Math.max(previousScenario.best, score),
+            lastScore: score,
+            lastPracticedAt: practicedAt,
+          },
+        },
+        lastPracticedAt: practicedAt,
+      };
+    });
   }
 
   function toggleCatalogCheck(itemId: string, check: string) {
@@ -2874,7 +3276,7 @@ export default function Home() {
       const data = await readResponseJson<Partial<TrainingFeedback>>(response);
       if (!data.customerReply || typeof data.score !== "number") throw new Error("Resposta inválida");
       const feedback: TrainingFeedback = {
-        mode: data.mode === "ia" ? "ia" : "guiado",
+        mode: data.mode === "contextual" ? "contextual" : "guiado",
         score: Math.max(0, Math.min(10, Math.round(data.score))),
         phase: typeof data.phase === "string" ? data.phase : turn === 0 ? "Abertura e diagnóstico" : turn < 3 ? "Descoberta e condução" : "Confirmação e fechamento",
         skillScores: normalizeSkillScores(data.skillScores, Math.round(data.score)),
@@ -2940,7 +3342,7 @@ export default function Home() {
   }
 
   function goToNextFactoryWizardStep() {
-    if (!factoryWizardDraft[activeFactoryWizardStep.key].trim()) {
+    if (!activeFactoryWizardStep.optional && !factoryWizardDraft[activeFactoryWizardStep.key].trim()) {
       showToast(`Preencha ${activeFactoryWizardStep.label} ou marque como A confirmar`);
       return;
     }
@@ -2957,7 +3359,7 @@ export default function Home() {
   }
 
   function addFactoryWizardItem() {
-    const missingStep = factoryWizardSteps.findIndex(({ key }) => !factoryWizardDraft[key].trim());
+    const missingStep = factoryWizardSteps.findIndex(({ key, optional }) => !optional && !factoryWizardDraft[key].trim());
     if (missingStep >= 0) {
       setFactoryWizardStep(missingStep);
       showToast(`Conclua a etapa ${factoryWizardSteps[missingStep].label} ou marque como A confirmar`);
@@ -2967,15 +3369,15 @@ export default function Home() {
     const generatedItem: FactoryRequestItem = {
       id: `wizard-${Date.now()}`,
       manufacturer: "DALCOMAD",
+      description: "KIT PORTA",
+      opening: "ABRIR",
       ...factoryWizardDraft,
-      priceWithoutLock: "",
-      priceWithLock: "",
     };
     setFactoryItems((current) => {
       return [...current, generatedItem];
     });
     resetFactoryWizard();
-    showToast("Orçamento enviado para a requisição Dalcomad");
+    showToast("Kit enviado para a requisição Dalcomad");
   }
 
   function clearFactoryItems() {
@@ -2984,14 +3386,13 @@ export default function Home() {
     showToast("Itens enviados removidos");
   }
 
-  async function exportFactoryToExcel() {
+  function exportFactoryToExcel() {
     if (filledFactoryItems.length === 0) {
       showToast("Preencha pelo menos uma linha antes de exportar");
       return;
     }
 
     try {
-      const { utils, writeFile } = await import("xlsx");
       const rows = filledFactoryItems.map((item) => [
         item.manufacturer || "DALCOMAD",
         item.description,
@@ -3005,24 +3406,8 @@ export default function Home() {
         parseFactoryPrice(item.priceWithoutLock),
         parseFactoryPrice(item.priceWithLock),
       ]);
-      const requestsSheet = utils.aoa_to_sheet([factoryHeaders, ...rows]);
-      requestsSheet["!cols"] = [
-        { wch: 16 }, { wch: 22 }, { wch: 19 }, { wch: 18 }, { wch: 13 }, { wch: 14 },
-        { wch: 15 }, { wch: 19 }, { wch: 17 }, { wch: 18 }, { wch: 21 },
-      ];
-      for (let row = 2; row <= rows.length + 1; row += 1) {
-        for (const column of ["J", "K"]) {
-          const cell = requestsSheet[`${column}${row}`];
-          if (cell && typeof cell.v === "number") cell.z = "R$ #,##0.00";
-        }
-      }
-      requestsSheet["!autofilter"] = { ref: `A1:K${rows.length + 1}` };
-
       const listRows: (string | null)[][] = [["Campo", "Valor"]];
       const listMap: [string, string][] = [
-        ["Fabricantes", "manufacturers"],
-        ["Descrições", "descriptions"],
-        ["Modelos de abertura", "openings"],
         ["Requadros", "requadros"],
         ["Cores", "colors"],
         ["Linhas", "lines"],
@@ -3031,24 +3416,35 @@ export default function Home() {
       ];
       listMap.forEach(([label, key]) => factoryListOptions[key].forEach((option) => listRows.push([label, option])));
       listRows.push(["Fabricante fixo", "DALCOMAD"]);
-      listRows.push(["Orientação", "O fabricante é fixo em DALCOMAD, mas cor, linha e acabamento devem ser conferidos individualmente em cada item. Campos incompletos devem ficar como A confirmar ou em branco. Os valores são apenas campos de entrada, sem cálculo automático."]);
-      const listsSheet = utils.aoa_to_sheet(listRows);
-      listsSheet["!cols"] = [{ wch: 24 }, { wch: 105 }];
-
-      const workbook = utils.book_new();
-      workbook.Props = {
-        Title: "Requisição para fábrica — Mult Portas",
-        Subject: "Consulta e requisição técnica de produtos",
-        Author: "Mult Portas",
-        CreatedDate: new Date(),
-      };
-      utils.book_append_sheet(workbook, requestsSheet, "Requisições");
-      utils.book_append_sheet(workbook, listsSheet, "Listas");
-
+      listRows.push(["Produto fixo", "KIT PORTA"]);
+      listRows.push(["Abertura fixa", "ABRIR"]);
+      listRows.push(["Orientação", "Esta planilha é exclusiva para montagem de Kit Porta Dalcomad. Não inclui porta de correr, folha avulsa nem opções externas à lista. Cor, linha, acabamento e preenchimento devem ser conferidos em cada kit. Valores são manuais, sem cálculo automático."]);
       const fileDate = new Intl.DateTimeFormat("sv-SE").format(new Date());
-      writeFile(workbook, `Requisicao_Fabrica_Mult_Portas_${fileDate}.xlsx`, { bookType: "xlsx" });
+      downloadWorkbook({
+        filename: `Requisicao_Kit_Porta_Dalcomad_${fileDate}.xlsx`,
+        title: "Requisição de Kit Porta Dalcomad — Mult Portas",
+        subject: "Montagem e requisição técnica de kits de porta",
+        author: "Mult Portas",
+        sheets: [
+          {
+            name: "Requisições",
+            rows: [factoryHeaders, ...rows],
+            columnWidths: [16, 22, 19, 18, 13, 14, 15, 19, 17, 18, 21],
+            currencyColumns: [9, 10],
+            autoFilter: true,
+          },
+          {
+            name: "Listas",
+            rows: listRows,
+            columnWidths: [24, 105],
+            wrappedColumns: [1],
+            autoFilter: true,
+          },
+        ],
+      });
       showToast(`${rows.length} ${rows.length === 1 ? "item exportado" : "itens exportados"} para Excel`);
-    } catch {
+    } catch (error) {
+      console.error("Falha ao exportar requisição Dalcomad", error);
       showToast("Não foi possível gerar o arquivo Excel; tente novamente");
     }
   }
@@ -3066,7 +3462,7 @@ export default function Home() {
   }
 
   if (!authUser && !isAdmin) {
-    return <AuthScreen mode={authMode} setMode={setAuthMode} form={authForm} setForm={setAuthForm} error={authError} busy={authBusy} onSubmit={handleAuthSubmit} />;
+    return <AuthScreen mode={authMode} setMode={(mode) => { setAuthMode(mode); setAuthError(""); }} form={authForm} setForm={setAuthForm} error={authError} busy={authBusy} onSubmit={handleAuthSubmit} />;
   }
 
   if (isAdmin) return <AccountCenter onLogout={handleLogout} />;
@@ -3085,10 +3481,10 @@ export default function Home() {
         <div className="sidebar-label">Navegação</div>
         <nav className="sidebar-nav" aria-label="Navegação principal">
           {sections.map((item) => (
-            <button key={item.id} className={`nav-item ${section === item.id ? "active" : ""}`} onClick={() => navigate(item.id)}>
+            <button key={item.id} className={`nav-item ${section === item.id ? "active" : ""}`} onClick={() => navigate(item.id)} aria-current={section === item.id ? "page" : undefined}>
               <span className="nav-icon">{item.icon}</span>
               <span className="nav-text"><strong>{item.label}</strong><small>{item.description}</small></span>
-              {item.id === "control" && <span className="nav-count">20</span>}
+              {item.id === "control" && <span className="nav-count">{openActionCount}</span>}
             </button>
           ))}
         </nav>
@@ -3107,30 +3503,54 @@ export default function Home() {
           <div className="mobile-brand"><span className="brand-mark small">MP</span><strong>GUIA MULT PORTAS</strong></div>
           <div className="breadcrumbs"><span>Mult Portas</span><b>/</b><strong>{sections.find((item) => item.id === section)?.label}</strong></div>
           <div className="topbar-actions">
+            <span className={`save-status ${saveStatus}`} role="status" aria-live="polite"><i />{saveStatusLabel}</span>
             <span className="date-chip">{today}</span>
             <div className="user-area">
               <span className="user-chip">{authUser.displayName.slice(0, 1).toUpperCase()}</span>
               <div className="user-details"><strong>{authUser.displayName}</strong><small>{authUser.branch} · {authUser.username}</small></div>
+              <button className="profile-button" type="button" onClick={openProfileEditor}>Meu perfil</button>
               <button className="logout-button" type="button" onClick={handleLogout}>Sair da conta</button>
             </div>
           </div>
         </header>
 
+        {profileOpen && (
+          <div className="profile-backdrop" role="presentation" onMouseDown={closeProfileEditor}>
+            <section className="profile-dialog" role="dialog" aria-modal="true" aria-labelledby="profile-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
+              <div className="profile-dialog-head">
+                <div><span className="section-kicker">CONTA DO FUNCIONÁRIO</span><h2 id="profile-dialog-title">Editar meu perfil</h2><p>Atualize seu nome, filial ou senha sem perder os dados salvos.</p></div>
+                <button type="button" className="profile-close" onClick={closeProfileEditor} aria-label="Fechar edição do perfil">×</button>
+              </div>
+              <form className="profile-form" onSubmit={handleProfileSubmit}>
+                <label><span>Nome completo</span><input value={profileForm.displayName} onChange={(event) => setProfileForm((current) => ({ ...current, displayName: event.target.value }))} autoComplete="name" minLength={2} maxLength={80} required /></label>
+                <label><span>Usuário de acesso</span><input value={profileForm.username} onChange={(event) => setProfileForm((current) => ({ ...current, username: event.target.value }))} autoComplete="username" minLength={3} maxLength={40} pattern="[a-zA-Z0-9._-]+" required /></label>
+                <label><span>Filial</span><select value={profileForm.branch} onChange={(event) => setProfileForm((current) => ({ ...current, branch: event.target.value as EmployeeUser["branch"] }))}><option value="Araraquara">Araraquara</option><option value="São Carlos">São Carlos</option></select></label>
+                <div className="profile-password-copy"><strong>Segurança do acesso</strong><small>A senha atual é obrigatória ao trocar o usuário ou criar uma nova senha. Deixe a nova senha vazia para mantê-la.</small></div>
+                <label><span>Senha atual</span><input type="password" value={profileForm.currentPassword} onChange={(event) => setProfileForm((current) => ({ ...current, currentPassword: event.target.value }))} autoComplete="current-password" /></label>
+                <label><span>Nova senha</span><input type="password" value={profileForm.newPassword} onChange={(event) => setProfileForm((current) => ({ ...current, newPassword: event.target.value }))} autoComplete="new-password" minLength={profileForm.newPassword ? 8 : undefined} /></label>
+                <label><span>Confirmar nova senha</span><input type="password" value={profileForm.confirmPassword} onChange={(event) => setProfileForm((current) => ({ ...current, confirmPassword: event.target.value }))} autoComplete="new-password" minLength={profileForm.confirmPassword ? 8 : undefined} /></label>
+                {profileError && <div className="auth-error profile-error" role="alert">{profileError}</div>}
+                <div className="profile-actions"><button className="button account-cancel" type="button" onClick={closeProfileEditor} disabled={profileBusy}>Cancelar</button><button className="button dark" type="submit" disabled={profileBusy}>{profileBusy ? "Salvando…" : "Salvar perfil"}</button></div>
+              </form>
+            </section>
+          </div>
+        )}
+
         <div className="mobile-nav" aria-label="Navegação rápida">
-          {sections.map((item) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => navigate(item.id)}>{item.icon} {item.label}</button>)}
+          {sections.map((item) => <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => navigate(item.id)} aria-current={section === item.id ? "page" : undefined}>{item.icon} {item.label}</button>)}
         </div>
 
         {section === "overview" && (
           <div className="page-content">
             <section className="hero-panel">
               <div className="hero-copy">
-                <div className="eyebrow"><span className="eyebrow-line" /> PAINEL DE COMANDO · MULT PORTAS ARARAQUARA</div>
+                <div className="eyebrow"><span className="eyebrow-line" /> PAINEL DE COMANDO · MULT PORTAS {authUser.branch.toUpperCase()}</div>
                 <h1>Venda com clareza.<br /><em>Acompanhe sem esquecer.</em></h1>
                 <p>Um guia prático para escolher melhor, retornar no momento certo e transformar cada orçamento em próximo passo.</p>
                 <div className="hero-actions">
                   <button className="button primary" onClick={() => navigate("script")}>Começar atendimento <span>↗</span></button>
                   <button className="button ghost" onClick={() => navigate("catalog")}>Pesquisar catálogo <span>⌕</span></button>
-                  <button className="button ai-button" onClick={() => navigate("training")}>Treinar conversa <span>✦</span></button>
+                  <button className="button coach-button" onClick={() => navigate("training")}>Treinar conversa <span>✦</span></button>
                   <button className="button message-button" onClick={() => navigate("messages")}>Criar mensagem <span>✎</span></button>
                   <button className="button factory-button" onClick={() => navigate("factory")}>Requisição fábrica <span>▤</span></button>
                 </div>
@@ -3231,11 +3651,11 @@ export default function Home() {
                 <h1>Venda melhor<br /><em>na prática.</em></h1>
                 <p>Treine respostas para situações reais da Mult Portas. O cliente simulado reage, o treinador avalia e você aprende a conduzir sem inventar informação.</p>
               </div>
-              <div className="training-score-card"><span>ÍNDICE DE APRENDIZADO</span><strong>{learningMetric}<small>/100</small></strong><small>{trainingScores.length ? `média ${trainingAverage.toFixed(1)}/10` : "comece a primeira rodada"}</small><small>{trainingStats.rounds} rodada{trainingStats.rounds === 1 ? "" : "s"} · melhor {trainingStats.best ? `${trainingStats.best}/10` : "—"}</small></div>
+              <div className="training-score-card"><span>ÍNDICE DE APRENDIZADO</span><strong>{learningMetric}<small>/100</small></strong><small>{learningStage}{trainingScores.length ? ` · média ${trainingAverage.toFixed(1)}/10` : " · comece a primeira rodada"}</small><small>{trainingStats.rounds} rodada{trainingStats.rounds === 1 ? "" : "s"} · melhor {trainingStats.best ? `${trainingStats.best}/10` : "—"}</small></div>
             </div>
 
             <section className="training-hero panel">
-              <div className="training-hero-main"><div className="ai-pulse"><span>◉</span></div><div><span className="section-kicker">ASSISTENTE DE TREINO COMERCIAL</span><h2>O cliente reage ao que você fala — agora com voz.</h2><p>Fale como no WhatsApp, revise a transcrição, ouça o cliente simulado e receba uma leitura específica do que ele entendeu, do que falta e do próximo passo.</p></div></div>
+              <div className="training-hero-main"><div className="coach-pulse"><span>◉</span></div><div><span className="section-kicker">ASSISTENTE DE TREINO COMERCIAL</span><h2>O cliente reage ao que você fala — agora com voz.</h2><p>Fale como no WhatsApp, revise a transcrição, ouça o cliente simulado e receba uma leitura específica do que ele entendeu, do que falta e do próximo passo.</p></div></div>
               <div className="training-feature-list"><span><b>01</b> Fale como no atendimento real</span><span><b>02</b> O cliente responde ao seu conteúdo</span><span><b>03</b> Receba nota e próximo movimento</span></div>
             </section>
 
@@ -3248,11 +3668,13 @@ export default function Home() {
                   <span style={{ width: `${learningMetric}%` }} />
                 </div>
                 <small>{trainingScores.length ? (trainingTrend > 0.2 ? `Tendência de alta: +${trainingTrend.toFixed(1)} ponto${trainingTrend >= 1 ? "s" : ""} nas últimas respostas.` : trainingTrend < -0.2 ? `Atenção: a média recente caiu ${Math.abs(trainingTrend).toFixed(1)} ponto${Math.abs(trainingTrend) >= 1 ? "s" : ""}. Revise os ajustes do treinador.` : "Tendência estável nas últimas respostas.") : "Faça uma rodada para começar a acompanhar sua evolução."}</small>
+                <div className="learning-focus"><span>FOCO RECOMENDADO</span><strong>{weakestTrainingSkill ? weakestTrainingSkill.label : "Comece pelo acolhimento e diagnóstico"}</strong><small>{weakestTrainingSkill ? `${weakestTrainingSkill.hint} · média ${averageTrainingSkills[weakestTrainingSkill.id]}/10` : "A recomendação muda conforme suas respostas forem avaliadas."}</small></div>
               </div>
               <div className="learning-metric-grid">
                 <div><strong>{trainingScores.length ? trainingAverage.toFixed(1) : "—"}</strong><span>média das notas</span></div>
                 <div><strong>{trainingStats.scenarios.length}/{trainingScenarios.length}</strong><span>cenários praticados</span></div>
                 <div><strong>{trainingStats.best ? `${trainingStats.best}/10` : "—"}</strong><span>melhor nota</span></div>
+                <div><strong>{masteredScenarios}</strong><span>cenários dominados</span></div>
               </div>
             </section>
 
@@ -3271,15 +3693,15 @@ export default function Home() {
                   <>
                     <div className="training-session-head"><div><span className="section-kicker">{currentTrainingScenario.tag} · {currentTrainingScenario.level.toUpperCase()}</span><h2>{currentTrainingScenario.title}</h2></div><div className="training-session-actions"><span className={`voice-ready ${voiceSupported ? "ready" : "limited"}`}><span />{voiceSupported ? "voz disponível" : "modo texto"}</span><button className="text-button" onClick={resetTraining}>Encerrar treino <span>×</span></button></div></div>
                     <div className="training-chat" aria-live="polite"><div className="training-chat-scroll">{trainingMessages.map((message, index) => <div className={`training-bubble ${message.role}`} key={`${message.role}-${index}`}><div className="bubble-label"><span>{message.role === "customer" ? "CLIENTE SIMULADO" : "SUA RESPOSTA"}</span>{message.role === "customer" && <button className="speak-button" type="button" onClick={() => speakText(message.text, `customer-${index}`)}>{speakingMessageId === `customer-${index}` ? "Parar áudio" : "Ouvir cliente"} <span>{speakingMessageId === `customer-${index}` ? "■" : "▶"}</span></button>}</div><p>{message.text}</p>{message.audioUrl && <audio className="voice-audio" controls preload="metadata" src={message.audioUrl} aria-label="Ouvir sua resposta gravada" />}</div>)}{trainingBusy && <div className="training-thinking"><span className="thinking-dot" /><span className="thinking-dot" /><span className="thinking-dot" /> treinador analisando</div>}</div><div className="training-composer-shell"><div className="training-mode-switch" role="tablist" aria-label="Modo de resposta"><button type="button" className={trainingInputMode === "voice" ? "active" : ""} onClick={() => setTrainingInputMode("voice")} role="tab" aria-selected={trainingInputMode === "voice"}>◉ Falar</button><button type="button" className={trainingInputMode === "text" ? "active" : ""} onClick={() => setTrainingInputMode("text")} role="tab" aria-selected={trainingInputMode === "text"}>Aa Digitar</button></div>{trainingInputMode === "voice" && <div className="voice-control-panel"><button type="button" className={`voice-record-button ${isRecording ? "recording" : ""}`} onClick={isRecording ? stopVoiceCapture : startVoiceCapture} disabled={trainingBusy} aria-pressed={isRecording}><span className="voice-mic">{isRecording ? "■" : "●"}</span><span>{isRecording ? `Parar gravação · ${formatVoiceDuration(voiceSeconds)}` : "Gravar resposta"}</span></button><div className="voice-control-copy"><strong>{voiceStatus}</strong><small>{speechSupported ? "A fala é transcrita no navegador e pode ser editada antes do envio." : "Seu navegador não transcreve automaticamente; você ainda pode gravar e digitar a resposta."}</small></div>{voicePreviewUrl && !isRecording && <audio className="voice-preview" controls preload="metadata" src={voicePreviewUrl} aria-label="Prévia da sua resposta gravada" />} {(voicePreviewUrl || voiceTranscript) && !isRecording && <button type="button" className="voice-discard" onClick={discardVoiceDraft}>Refazer <span>↻</span></button>}</div>}<form className="training-composer" onSubmit={sendTrainingMessage}><textarea value={trainingInput} onChange={(event) => setTrainingInput(event.target.value)} placeholder={trainingInputMode === "voice" ? "Sua transcrição aparece aqui. Revise antes de enviar..." : "Digite como você responderia ao cliente..."} aria-label="Sua resposta para o cliente" disabled={trainingBusy || isRecording} rows={trainingInputMode === "voice" ? 2 : 1} />{voiceInterim && <span className="voice-interim">ouvindo: {voiceInterim}</span>}<button className="button dark" type="submit" disabled={trainingBusy || isRecording || !trainingInput.trim()}>{trainingBusy ? "Analisando" : "Enviar resposta"} <span>↗</span></button></form></div></div>
-                    <div className="training-session-foot"><span>Regra do treino: não invente medida, valor, estoque ou prazo.</span><span>{trainingTurns} resposta{trainingTurns === 1 ? "" : "s"} enviada{trainingTurns === 1 ? "" : "s"} · avanço {Math.min(trainingTurns, currentTrainingScenario.customerReplies.length)}/{currentTrainingScenario.customerReplies.length}</span></div>
+                    <div className="training-session-foot"><span>Regra do treino: não invente medida, valor, estoque ou prazo.</span><span>{trainingTurns} resposta{trainingTurns === 1 ? "" : "s"} enviada{trainingTurns === 1 ? "" : "s"} · melhor neste cenário {trainingStats.scenarioStats[currentTrainingScenario.id]?.best ? `${trainingStats.scenarioStats[currentTrainingScenario.id].best}/10` : "—"}</span></div>
                   </>
                 )}
               </section>
             </div>
 
-            {trainingFeedback && <section className="training-feedback panel" aria-live="polite"><div className="feedback-score"><strong>{trainingFeedback.score}</strong><span>/10</span><small>{trainingFeedback.mode === "ia" ? "feedback da IA" : "feedback guiado"}</small></div><div className="feedback-main"><span className="section-kicker">LEITURA DA RESPOSTA</span><h2>{trainingFeedback.summary}</h2><div className="feedback-insights"><div><span className="mini-label">TOM DO CLIENTE</span><strong>{trainingFeedback.customerMood}</strong></div><div><span className="mini-label">O QUE FALTA AGORA</span><strong>{trainingFeedback.customerNeed}</strong></div><div><span className="mini-label">LEITURA DO TREINADOR</span><strong>{trainingFeedback.coachNote}</strong></div></div><div className="feedback-columns"><div><span className="mini-label">VOCÊ ACERTOU</span>{trainingFeedback.strengths.map((item) => <p key={item}>✓ {item}</p>)}</div><div><span className="mini-label">PRÓXIMO AJUSTE</span>{trainingFeedback.improvements.map((item) => <p key={item}>→ {item}</p>)}</div></div><div className="feedback-next"><span>PRÓXIMA JOGADA</span><strong>{trainingFeedback.nextMove}</strong></div><div className="feedback-actions"><button className="button dark" onClick={() => startTraining()}>Repetir cenário <span>↻</span></button><button className="text-button" onClick={resetTraining}>Escolher outro cenário <span>→</span></button></div></div></section>}
+            {trainingFeedback && <section className="training-feedback panel" aria-live="polite"><div className="feedback-score"><strong>{trainingFeedback.score}</strong><span>/10</span><small>{trainingFeedback.mode === "contextual" ? "feedback contextual" : "feedback guiado"}</small></div><div className="feedback-main"><span className="section-kicker">LEITURA DA RESPOSTA</span><h2>{trainingFeedback.summary}</h2><div className="feedback-insights"><div><span className="mini-label">TOM DO CLIENTE</span><strong>{trainingFeedback.customerMood}</strong></div><div><span className="mini-label">O QUE FALTA AGORA</span><strong>{trainingFeedback.customerNeed}</strong></div><div><span className="mini-label">LEITURA DO TREINADOR</span><strong>{trainingFeedback.coachNote}</strong></div></div><div className="feedback-columns"><div><span className="mini-label">VOCÊ ACERTOU</span>{trainingFeedback.strengths.map((item) => <p key={item}>✓ {item}</p>)}</div><div><span className="mini-label">PRÓXIMO AJUSTE</span>{trainingFeedback.improvements.map((item) => <p key={item}>→ {item}</p>)}</div></div><div className="feedback-next"><span>PRÓXIMA JOGADA</span><strong>{trainingFeedback.nextMove}</strong></div><div className="feedback-actions"><button className="button dark" onClick={() => startTraining()}>Repetir cenário <span>↻</span></button><button className="text-button" onClick={resetTraining}>Escolher outro cenário <span>→</span></button></div></div></section>}
 
-            {trainingFeedback && <section className="training-coach-detail panel" aria-label="Mapa de competências da resposta"><div className="training-coach-detail-head"><div><span className="section-kicker">DEBRIEF PROFISSIONAL</span><h2>{trainingFeedback.phase}</h2></div><span className="training-coach-mode">{trainingFeedback.mode === "ia" ? "análise contextual" : "análise guiada"}</span></div><small className="training-coach-average">Média acumulada das habilidades: {Math.round((averageTrainingSkills.acolhimento + averageTrainingSkills.diagnostico + averageTrainingSkills.precisao + averageTrainingSkills.valor + averageTrainingSkills.proximoPasso) / 5)}/10</small><div className="training-skills-grid">{trainingSkillMeta.map((skill) => <div className="training-skill" key={skill.id}><div><strong>{skill.label}</strong><span>{trainingFeedback.skillScores[skill.id]}/10</span></div><small>{skill.hint}</small><div className="training-skill-bar"><span style={{ width: `${trainingFeedback.skillScores[skill.id] * 10}%` }} /></div></div>)}</div><div className="training-reflection-grid"><div><span className="mini-label">PERGUNTA DE REFLEXÃO</span><p>{trainingFeedback.coachQuestion}</p></div><div><span className="mini-label">COMO TENTAR DE NOVO</span><p>{trainingFeedback.retryGuide}</p></div></div></section>}
+            {trainingFeedback && <section className="training-coach-detail panel" aria-label="Mapa de competências da resposta"><div className="training-coach-detail-head"><div><span className="section-kicker">DEBRIEF PROFISSIONAL</span><h2>{trainingFeedback.phase}</h2></div><span className="training-coach-mode">{trainingFeedback.mode === "contextual" ? "análise contextual" : "análise guiada"}</span></div><small className="training-coach-average">Média acumulada das habilidades: {Math.round((averageTrainingSkills.acolhimento + averageTrainingSkills.diagnostico + averageTrainingSkills.precisao + averageTrainingSkills.valor + averageTrainingSkills.proximoPasso) / 5)}/10</small><div className="training-skills-grid">{trainingSkillMeta.map((skill) => <div className="training-skill" key={skill.id}><div><strong>{skill.label}</strong><span>{trainingFeedback.skillScores[skill.id]}/10</span></div><small>{skill.hint}</small><div className="training-skill-bar"><span style={{ width: `${trainingFeedback.skillScores[skill.id] * 10}%` }} /></div></div>)}</div><div className="training-reflection-grid"><div><span className="mini-label">PERGUNTA DE REFLEXÃO</span><p>{trainingFeedback.coachQuestion}</p></div><div><span className="mini-label">COMO TENTAR DE NOVO</span><p>{trainingFeedback.retryGuide}</p></div></div></section>}
 
             <section className="training-rules"><div><span>01</span><strong>Diagnóstico antes do preço</strong><p>Descubra ambiente, objetivo, medida, quantidade e prazo.</p></div><div><span>02</span><strong>Valor com contexto</strong><p>Compare o que está incluso e separe principal, alternativa e “A confirmar”.</p></div><div><span>03</span><strong>Próximo passo claro</strong><p>Todo atendimento termina com ação, responsável e timing definidos.</p></div></section>
           </div>
@@ -3334,14 +3756,14 @@ export default function Home() {
             <div className="section-intro factory-intro">
               <div>
                 <span className="eyebrow"><span className="eyebrow-line" /> REQUISIÇÃO TÉCNICA · USO INTERNO</span>
-                <h1>Monte a ficha técnica.<br /><em>Envie sem ruído.</em></h1>
-                <p>Uma linha por produto para consultar ou requisitar à fábrica. Preencha as características, mantenha o que ainda falta como “A confirmar” e exporte o arquivo quando estiver pronto.</p>
+                <h1>Monte o Kit Porta.<br /><em>Envie sem ruído.</em></h1>
+                <p>Uma linha por Kit Porta Dalcomad. Preencha somente as características aplicáveis, mantenha o que ainda falta como “A confirmar” e exporte o arquivo quando estiver pronto.</p>
               </div>
               <div className="factory-count"><strong>{filledFactoryItems.length}</strong><span>{filledFactoryItems.length === 1 ? "item enviado" : "itens enviados"}</span><small>Uma linha por orçamento encaminhado</small></div>
             </div>
 
             <section className="factory-rules" aria-label="Regras da requisição">
-              <div><span>01</span><strong>Uma linha por item</strong><p>Separe cada porta, janela ou conjunto.</p></div>
+              <div><span>01</span><strong>Uma linha por kit</strong><p>Separe cada Kit Porta Dalcomad.</p></div>
               <div><span>02</span><strong>Consulta técnica</strong><p>Esta área não substitui o orçamento comercial.</p></div>
               <div><span>03</span><strong>Sem lacunas inventadas</strong><p>Use “A confirmar” ou deixe em branco.</p></div>
               <div><span>04</span><strong>Excel em um clique</strong><p>O arquivo leva as linhas preenchidas e as listas.</p></div>
@@ -3351,8 +3773,8 @@ export default function Home() {
               <div className="factory-toolbar">
                 <div>
                   <span className="section-kicker">REQUISIÇÃO TÉCNICA</span>
-                  <h2>Produtos para consultar ou requisitar</h2>
-                  <p>Planilha exclusiva Dalcomad: monte cada porta por etapas e exporte os itens quando a consulta estiver pronta.</p>
+                  <h2>Kits de porta para consultar ou requisitar</h2>
+                  <p>Planilha exclusiva: monte apenas Kit Porta Dalcomad de abrir e exporte os kits enviados quando a consulta estiver pronta.</p>
                 </div>
                 <div className="factory-actions">
                   <button className="button primary" type="button" onClick={exportFactoryToExcel}>Exportar Excel <span>↓</span></button>
@@ -3360,54 +3782,51 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="factory-fixed-settings" aria-label="Fabricante fixo da requisição">
+              <div className="factory-fixed-settings" aria-label="Escopo fixo da requisição">
                 <div className="factory-scope">
-                  <span className="section-kicker">FABRICANTE FIXO</span>
-                  <strong>DALCOMAD</strong>
-                  <p>Esta planilha foi preparada somente para requisições Dalcomad.</p>
+                  <span className="section-kicker">ESCOPO FIXO</span>
+                  <strong>DALCOMAD · KIT PORTA · ABRIR</strong>
+                  <p>Produto e abertura já estão definidos para todas as linhas.</p>
                 </div>
-                <div className="factory-fixed-note"><span className="mini-label">COMO FUNCIONA</span><p>O fabricante já fica definido. Você monta cada porta individualmente e escolhe cor, linha e acabamento para cada linha.</p></div>
+                <div className="factory-fixed-note"><span className="mini-label">O QUE ENTRA AQUI</span><p>Somente combinações de Kit Porta Dalcomad. Porta de correr, folha avulsa e opções externas não aparecem neste montador.</p></div>
               </div>
 
-              <section className="factory-locator" aria-label="Localizador passo a passo da porta">
+              <section className="factory-locator" aria-label="Montador passo a passo do Kit Porta Dalcomad">
                 <div className="factory-locator-header">
-                  <div><span className="section-kicker">LOCALIZADOR PASSO A PASSO</span><h3>Monte a porta desejada parte a parte</h3><p>Escolha uma característica por etapa. A linha só será criada quando você concluir e enviar este orçamento para a Dalcomad.</p></div>
+                  <div><span className="section-kicker">MONTADOR PASSO A PASSO</span><h3>Monte o Kit Porta Dalcomad</h3><p>Escolha uma característica válida por etapa. A linha só será criada quando você concluir e enviar este kit para a requisição.</p></div>
                   <div className="factory-step-counter"><strong>{String(factoryWizardStep + 1).padStart(2, "0")}</strong><span>/ {String(factoryWizardSteps.length).padStart(2, "0")}</span></div>
                 </div>
                 <div className="factory-progress" aria-hidden="true"><span style={{ width: `${factoryWizardProgress}%` }} /></div>
-                <div className="factory-step-tabs" role="tablist" aria-label="Etapas para localizar a porta">
+                <div className="factory-step-tabs" role="tablist" aria-label="Etapas para montar o kit">
                   {factoryWizardSteps.map((step, index) => <button key={step.key} type="button" role="tab" aria-selected={factoryWizardStep === index} aria-current={factoryWizardStep === index ? "step" : undefined} className={factoryWizardStep === index ? "active" : factoryWizardDraft[step.key].trim() ? "done" : ""} onClick={() => setFactoryWizardStep(index)}><b>{String(index + 1).padStart(2, "0")}</b><span>{step.label}</span></button>)}
                 </div>
                 <div className="factory-locator-body">
                   <div className="factory-locator-copy"><span className="section-kicker">ETAPA {String(factoryWizardStep + 1).padStart(2, "0")}</span><h4>{activeFactoryWizardStep.title}</h4><p>{activeFactoryWizardStep.hint}</p></div>
                   <div className="factory-locator-input-wrap">
-                    <label className="factory-locator-field"><span>{activeFactoryWizardStep.label}</span>{activeFactoryWizardStep.key === "color" ? <select className="factory-locator-select" value={factoryWizardDraft.color} onChange={(event) => updateFactoryWizard("color", event.target.value)} aria-label={`Etapa ${activeFactoryWizardStep.label}`} autoFocus><option value="">Selecione uma cor</option>{factoryListOptions.colors.map((option) => <option key={option} value={option}>{option}</option>)}<option value="A confirmar">A confirmar</option></select> : <input value={factoryWizardDraft[activeFactoryWizardStep.key]} onChange={(event) => updateFactoryWizard(activeFactoryWizardStep.key, event.target.value)} placeholder={activeFactoryWizardStep.placeholder} list={activeFactoryWizardStep.listId} autoComplete="off" aria-label={`Etapa ${activeFactoryWizardStep.label}`} autoFocus />}</label>
+                    <label className="factory-locator-field"><span>{activeFactoryWizardStep.label}{activeFactoryWizardStep.optional ? " · opcional" : ""}</span>{activeFactoryWizardStep.key === "color" ? <select className="factory-locator-select" value={factoryWizardDraft.color} onChange={(event) => updateFactoryWizard("color", event.target.value)} aria-label={`Etapa ${activeFactoryWizardStep.label}`} autoFocus><option value="">Selecione uma cor</option>{factoryListOptions.colors.map((option) => <option key={option} value={option}>{option}</option>)}<option value="A confirmar">A confirmar</option></select> : <input value={factoryWizardDraft[activeFactoryWizardStep.key]} onChange={(event) => updateFactoryWizard(activeFactoryWizardStep.key, event.target.value)} placeholder={activeFactoryWizardStep.placeholder} list={activeFactoryWizardStep.listId} inputMode={activeFactoryWizardStep.key === "priceWithoutLock" || activeFactoryWizardStep.key === "priceWithLock" ? "decimal" : undefined} autoComplete="off" aria-label={`Etapa ${activeFactoryWizardStep.label}`} autoFocus />}</label>
                     <div className="factory-suggestion-row" aria-label={`Sugestões para ${activeFactoryWizardStep.label}`}>
                       {factoryWizardOptions[activeFactoryWizardStep.key].map((option) => <button key={option} type="button" className={factoryWizardDraft[activeFactoryWizardStep.key] === option ? "selected" : ""} onClick={() => updateFactoryWizard(activeFactoryWizardStep.key, option)}>{option}</button>)}
                       <button type="button" className={factoryWizardDraft[activeFactoryWizardStep.key] === "A confirmar" ? "selected pending" : "pending"} onClick={setFactoryWizardPending}>A confirmar</button>
                     </div>
                   </div>
                 </div>
-                <div className="factory-locator-summary" aria-live="polite"><span className="mini-label">PRÉVIA DA PORTA</span><div>{factoryWizardSteps.map((step) => <span key={step.key} className={factoryWizardDraft[step.key].trim() ? "filled" : ""}><b>{step.label}</b>{factoryWizardDraft[step.key].trim() || "—"}</span>)}</div></div>
-                <div className="factory-locator-actions"><button className="text-button" type="button" onClick={resetFactoryWizard}>Limpar localizador</button><div><button className="button light" type="button" onClick={goToPreviousFactoryWizardStep} disabled={factoryWizardStep === 0}>← Voltar</button>{factoryWizardStep < factoryWizardSteps.length - 1 ? <button className="button dark" type="button" onClick={goToNextFactoryWizardStep}>Próxima etapa <span>→</span></button> : <button className="button primary" type="button" onClick={addFactoryWizardItem}>Enviar orçamento para Dalcomad <span>↗</span></button>}</div></div>
+                <div className="factory-locator-summary" aria-live="polite"><span className="mini-label">PRÉVIA DO KIT · DALCOMAD · KIT PORTA · ABRIR</span><div>{factoryWizardSteps.map((step) => <span key={step.key} className={factoryWizardDraft[step.key].trim() ? "filled" : ""}><b>{step.label}</b>{factoryWizardDraft[step.key].trim() || (step.optional ? "Opcional" : "—")}</span>)}</div></div>
+                <div className="factory-locator-actions"><button className="text-button" type="button" onClick={resetFactoryWizard}>Limpar montador</button><div><button className="button light" type="button" onClick={goToPreviousFactoryWizardStep} disabled={factoryWizardStep === 0}>← Voltar</button>{factoryWizardStep < factoryWizardSteps.length - 1 ? <button className="button dark" type="button" onClick={goToNextFactoryWizardStep}>Próxima etapa <span>→</span></button> : <button className="button primary" type="button" onClick={addFactoryWizardItem}>Enviar kit para a requisição <span>↗</span></button>}</div></div>
               </section>
 
               <div className="factory-submission-note" role="status" aria-live="polite">
                 <span><b>{filledFactoryItems.length}</b> {filledFactoryItems.length === 1 ? "item preparado" : "itens preparados"}</span>
-                <span>Os itens ficam salvos separadamente na sua conta e podem ser exportados para Excel quando a consulta estiver pronta.</span>
+                <span>Os kits enviados ficam salvos separadamente na sua conta e podem ser exportados para Excel quando a consulta estiver pronta.</span>
               </div>
 
               <div className="factory-bottom-bar" role="status" aria-live="polite"><span>✓ Salvo automaticamente na sua conta</span><span>→ Exporte o arquivo depois de finalizar o localizador.</span></div>
             </section>
 
             <section className="factory-notes-grid">
-              <article className="panel factory-note-card"><span className="section-kicker">COMO USAR</span><h2>Envie uma porta por vez.</h2><p>Monte a porta no localizador, confira a prévia e envie o orçamento para preparar a consulta. Se precisar mudar algo, ajuste as etapas antes de enviar.</p><div className="factory-note-list"><span>✓ Medida da folha e requadro</span><span>✓ Modelo de abertura</span><span>✓ Cor por item</span><span>✓ Acabamento por item</span></div></article>
+              <article className="panel factory-note-card"><span className="section-kicker">COMO USAR</span><h2>Envie um kit por vez.</h2><p>Monte o kit, confira a prévia e envie a linha para preparar a consulta. Se precisar mudar algo, ajuste as etapas antes de enviar.</p><div className="factory-note-list"><span>✓ Medida do kit e requadro</span><span>✓ Cor e linha Dalcomad</span><span>✓ Acabamento e preenchimento</span><span>✓ Valores manuais opcionais</span></div></article>
               <article className="panel factory-note-card accent"><span className="section-kicker">ANTES DE ENCAMINHAR</span><h2>Não misture consulta e venda.</h2><p>Este arquivo é uma requisição técnica para a fábrica. Não inclui desconto, parcelas, validade ou promessa de estoque e prazo.</p><button className="button dark" type="button" onClick={() => navigate("messages")}>Voltar para mensagem comercial <span>→</span></button></article>
             </section>
 
-            <datalist id="factory-manufacturers">{factoryListOptions.manufacturers.map((item) => <option key={item} value={item} />)}</datalist>
-            <datalist id="factory-descriptions">{factoryListOptions.descriptions.map((item) => <option key={item} value={item} />)}</datalist>
-            <datalist id="factory-openings">{factoryListOptions.openings.map((item) => <option key={item} value={item} />)}</datalist>
             <datalist id="factory-requadros">{factoryListOptions.requadros.map((item) => <option key={item} value={item} />)}</datalist>
             <datalist id="factory-colors">{factoryListOptions.colors.map((item) => <option key={item} value={item} />)}</datalist>
             <datalist id="factory-lines">{factoryListOptions.lines.map((item) => <option key={item} value={item} />)}</datalist>
@@ -3434,7 +3853,7 @@ export default function Home() {
             <section className="control-rules"><div><span className="rule-number">01</span><strong>Número imutável</strong><p>O oficial não muda.</p></div><div><span className="rule-number">02</span><strong>Um status principal</strong><p>Sem duplicidade de cobrança.</p></div><div><span className="rule-number">03</span><strong>Histórico separado</strong><p>Encerrado não volta sozinho.</p></div><div><span className="rule-number">04</span><strong>Valor exato</strong><p>Centavos preservados.</p></div></section>
             <section className="panel add-followup"><div><span className="section-kicker">NOVA PENDÊNCIA LOCAL</span><h2>Registrar sem perder tempo</h2></div><form onSubmit={addFollowUp}><input value={newClient} onChange={(event) => setNewClient(event.target.value)} placeholder="Cliente / orçamento" aria-label="Cliente ou orçamento" /><input value={newNext} onChange={(event) => setNewNext(event.target.value)} placeholder="Próxima ação" aria-label="Próxima ação" /><select value={newStatus} onChange={(event) => setNewStatus(event.target.value)} aria-label="Status">{statusOptions.map((status) => <option key={status}>{status}</option>)}</select><select value={newPriority} onChange={(event) => setNewPriority(event.target.value as Priority)} aria-label="Prioridade"><option>Alta</option><option>Média</option><option>Baixa</option></select><button className="button dark" type="submit">Adicionar <span>+</span></button></form></section>
             <section className="board-heading"><div><span className="section-kicker">QUADRO DE AÇÃO</span><h2>O que merece atenção</h2></div><select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value)} aria-label="Filtrar status"><option>Todos</option>{statusOptions.map((status) => <option key={status}>{status}</option>)}</select></section>
-            <section className="followup-list">{filteredFollowUps.map((item) => <article className={`followup-row ${item.done ? "completed" : ""}`} key={item.id}><button className={`row-check ${item.done ? "checked" : ""}`} onClick={() => setFollowUps((current) => current.map((follow) => follow.id === item.id ? { ...follow, done: !follow.done } : follow))}>{item.done ? "✓" : ""}</button><div className="follow-main"><strong>{item.client}</strong><span>{item.status}</span></div><div className="follow-next"><small>Próxima ação</small><p>{item.next}</p></div><span className={`priority-badge ${priorityClass(item.priority)}`}>{item.priority}</span>{item.id.startsWith("local-") && <button className="delete-row" aria-label="Excluir pendência" onClick={() => setFollowUps((current) => current.filter((follow) => follow.id !== item.id))}>×</button>}</article>)}{filteredFollowUps.length === 0 && <div className="empty-state">Nenhuma pendência com este filtro.</div>}</section>
+            <section className="followup-list">{filteredFollowUps.map((item) => <article className={`followup-row ${item.done ? "completed" : ""}`} key={item.id}><button type="button" className={`row-check ${item.done ? "checked" : ""}`} aria-label={item.done ? `Reabrir pendência de ${item.client}` : `Concluir pendência de ${item.client}`} onClick={() => setFollowUps((current) => current.map((follow) => follow.id === item.id ? { ...follow, done: !follow.done } : follow))}>{item.done ? "✓" : ""}</button><div className="follow-main"><strong>{item.client}</strong><span>{item.status}</span></div><div className="follow-next"><small>Próxima ação</small><p>{item.next}</p></div><span className={`priority-badge ${priorityClass(item.priority)}`}>{item.priority}</span>{item.id.startsWith("local-") && <button type="button" className="delete-row" aria-label={`Excluir pendência de ${item.client}`} onClick={() => setFollowUps((current) => current.filter((follow) => follow.id !== item.id))}>×</button>}</article>)}{filteredFollowUps.length === 0 && <div className="empty-state">Nenhuma pendência com este filtro.</div>}</section>
             <div className="control-footnote"><span>!</span><p>Campos que não estiverem confirmados devem ficar como <strong>“A confirmar”</strong> ou em branco. Não transforme alternativa em venda e não some opções de cor como se fossem um único negócio.</p></div>
           </div>
         )}

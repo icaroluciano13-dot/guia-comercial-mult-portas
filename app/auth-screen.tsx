@@ -56,16 +56,16 @@ export function AuthScreen({ mode, setMode, form, setForm, error, busy, onSubmit
           </button>
         </div>
 
-        <form className="auth-form" onSubmit={onSubmit}>
+        <form className="auth-form" onSubmit={onSubmit} aria-describedby={error ? "auth-error" : undefined}>
           {isRegister && (
             <label>
               <span>Nome completo</span>
-              <input value={form.displayName} onChange={(event) => update("displayName", event.target.value)} placeholder="Nome do funcionário" autoComplete="name" required />
+              <input value={form.displayName} onChange={(event) => update("displayName", event.target.value)} placeholder="Nome do funcionário" autoComplete="name" minLength={2} maxLength={80} required />
             </label>
           )}
           <label>
             <span>Usuário</span>
-            <input value={form.username} onChange={(event) => update("username", event.target.value)} placeholder="ex.: nome.sobrenome" autoComplete="username" required />
+            <input value={form.username} onChange={(event) => update("username", event.target.value)} placeholder="ex.: nome.sobrenome" autoComplete="username" autoCapitalize="none" spellCheck={false} minLength={3} maxLength={40} pattern="[a-zA-Z0-9._-]+" required />
           </label>
           {isRegister && (
             <label>
@@ -78,15 +78,15 @@ export function AuthScreen({ mode, setMode, form, setForm, error, busy, onSubmit
           )}
           <label>
             <span>Senha</span>
-            <input type="password" value={form.password} onChange={(event) => update("password", event.target.value)} placeholder="Mínimo de 6 caracteres" autoComplete={isRegister ? "new-password" : "current-password"} required />
+            <input type="password" value={form.password} onChange={(event) => update("password", event.target.value)} placeholder={isRegister ? "Mínimo de 8 caracteres" : "Digite sua senha"} autoComplete={isRegister ? "new-password" : "current-password"} minLength={isRegister ? 8 : undefined} maxLength={120} required />
           </label>
           {isRegister && (
             <label>
               <span>Confirmar senha</span>
-              <input type="password" value={form.confirmPassword} onChange={(event) => update("confirmPassword", event.target.value)} placeholder="Repita a senha" autoComplete="new-password" required />
+              <input type="password" value={form.confirmPassword} onChange={(event) => update("confirmPassword", event.target.value)} placeholder="Repita a senha" autoComplete="new-password" minLength={8} maxLength={120} required />
             </label>
           )}
-          {error && <div className="auth-error" role="alert">{error}</div>}
+          {error && <div className="auth-error" id="auth-error" role="alert">{error}</div>}
           <button className="button primary auth-submit" type="submit" disabled={busy}>
             {busy ? "Aguarde…" : isRegister ? "Criar cadastro" : "Entrar no guia"}
             {!busy && <span>→</span>}

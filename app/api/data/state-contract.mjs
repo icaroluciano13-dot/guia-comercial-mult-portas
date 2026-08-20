@@ -1,0 +1,182 @@
+export const GUIDE_STATE_VERSION = 2;
+
+const MAX_COLLECTION = 240;
+const SKILL_IDS = ["acolhimento", "diagnostico", "precisao", "valor", "proximoPasso"];
+const TOTAL_TRAINING_SCENARIOS = 16;
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function cleanString(value, maxLength = 240) {
+  return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+}
+
+function cleanNumber(value, max = 1_000_000) {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(max, number)) : 0;
+}
+
+function cleanInteger(value, max = 1_000_000) {
+  return Math.round(cleanNumber(value, max));
+}
+
+function cleanStringArray(value, maxItems = MAX_COLLECTION, maxLength = 120) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => cleanString(item, maxLength)).filter(Boolean))].slice(-maxItems);
+}
+
+function normalizeMetrics(value) {
+  const source = isRecord(value) ? value : {};
+  return {
+    leads: cleanInteger(source.leads),
+    quotes: cleanInteger(source.quotes),
+    officialQuotes: cleanInteger(source.officialQuotes),
+    incompleteQuotes: cleanInteger(source.incompleteQuotes),
+    followups: cleanInteger(source.followups),
+    closed: cleanInteger(source.closed),
+    ticket: cleanNumber(source.ticket, 100_000_000),
+  };
+}
+
+function normalizeSkillScores(value) {
+  const source = isRecord(value) ? value : {};
+  return Object.fromEntries(SKILL_IDS.map((skill) => [skill, cleanInteger(source[skill], 10)]));
+}
+
+function normalizeScenarioStats(value) {
+  if (!isRecord(value)) return {};
+  const result = {};
+  for (const [scenarioId, raw] of Object.entries(value).slice(0, 80)) {
+    const id = cleanString(scenarioId, 80);
+    if (!id || ["__proto__", "prototype", "constructor"].includes(id) || !isRecord(raw)) continue;
+    result[id] = {
+      attempts: cleanInteger(raw.attempts, 10_000),
+      best: cleanInteger(raw.best, 10),
+      lastScore: cleanInteger(raw.lastScore, 10),
+      lastPracticedAt: cleanString(raw.lastPracticedAt, 40) || null,
+    };
+  }
+  return result;
+}
+
+function normalizeTraining(value) {
+  const source = isRecord(value) ? value : {};
+  const scoreHistory = Array.isArray(source.scoreHistory)
+    ? source.scoreHistory.map((score) => cleanInteger(score, 10)).slice(-120)
+    : [];
+  const skillHistory = Array.isArray(source.skillHistory)
+    ? source.skillHistory.filter(isRecord).map(normalizeSkillScores).slice(-120)
+    : [];
+  const bestFromHistory = scoreHistory.length ? Math.max(...scoreHistory) : 0;
+  return {
+    rounds: cleanInteger(source.rounds ?? source.sessions, 100_000),
+    best: Math.max(cleanInteger(source.best, 10), bestFromHistory),
+    scenarios: cleanStringArray(source.scenarios, 80, 80),
+    scoreHistory,
+    skillHistory,
+    scenarioStats: normalizeScenarioStats(source.scenarioStats),
+    lastPracticedAt: cleanString(source.lastPracticedAt, 40) || null,
+  };
+}
+
+function normalizeFollowUps(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).slice(-MAX_COLLECTION).map((item, index) => ({
+    id: cleanString(item.id, 80) || `registro-${index + 1}`,
+    client: cleanString(item.client, 160),
+    status: cleanString(item.status, 80) || "Aguardando retorno",
+    next: cleanString(item.next, 240),
+    priority: ["Alta", "Média", "Baixa"].includes(item.priority) ? item.priority : "Média",
+    done: item.done === true,
+  })).filter((item) => item.client || item.next);
+}
+
+function normalizeMessages(value) {
+  const source = isRecord(value) ? value : {};
+  const proof = isRecord(source.proof) ? source.proof : {};
+  return {
+    name: cleanString(source.name, 120),
+    line: cleanString(source.line, 160),
+    environment: cleanString(source.environment, 160),
+    objective: cleanString(source.objective, 240),
+    question: cleanString(source.question, 240),
+    channel: ["WhatsApp", "Áudio"].includes(source.channel) ? source.channel : "WhatsApp",
+    tone: ["Consultivo", "Direto", "Próximo"].includes(source.tone) ? source.tone : "Consultivo",
+    proof: {
+      company: proof.company !== false,
+      quality: proof.quality !== false,
+      guarantee: proof.guarantee !== false,
+    },
+  };
+}
+
+function normalizeFactory(value) {
+  if (!Array.isArray(value)) return [];
+  const fields = ["description", "opening", "leafMeasure", "requadro", "color", "line", "finish", "filling", "priceWithoutLock", "priceWithLock"];
+  return value.filter(isRecord).slice(-MAX_COLLECTION).map((item, index) => {
+    const normalized = {
+      id: cleanString(item.id, 80) || `item-${index + 1}`,
+      manufacturer: "DALCOMAD",
+    };
+    for (const field of fields) normalized[field] = cleanString(item[field], 180);
+    return normalized;
+  });
+}
+
+function normalizeDrawerChecks(value) {
+  if (!isRecord(value)) return {};
+  const result = {};
+  for (const [itemId, checks] of Object.entries(value).slice(0, MAX_COLLECTION)) {
+    const id = cleanString(itemId, 80);
+    if (!id || ["__proto__", "prototype", "constructor"].includes(id)) continue;
+    result[id] = cleanStringArray(checks, 40, 180);
+  }
+  return result;
+}
+
+export function normalizeEmployeeState(value) {
+  const source = isRecord(value) ? value : {};
+  return {
+    schemaVersion: GUIDE_STATE_VERSION,
+    sales: cleanStringArray(source.sales, 120, 80),
+    timing: cleanStringArray(source.timing, 120, 80),
+    followups: normalizeFollowUps(source.followups),
+    checks: cleanStringArray(source.checks, 120, 80),
+    metrics: normalizeMetrics(source.metrics),
+    training: normalizeTraining(source.training),
+    messages: normalizeMessages(source.messages),
+    factory: normalizeFactory(source.factory),
+    drawerChecks: normalizeDrawerChecks(source.drawerChecks),
+  };
+}
+
+export function summarizeEmployeeState(value) {
+  const state = normalizeEmployeeState(value);
+  const scores = state.training.scoreHistory;
+  const averageScore = scores.length ? scores.reduce((total, score) => total + score, 0) / scores.length : 0;
+  const scenarioCoverage = Math.min(state.training.scenarios.length / TOTAL_TRAINING_SCENARIOS, 1);
+  const consistency = Math.min(state.training.rounds / 12, 1);
+  const learningIndex = scores.length ? Math.round((averageScore / 10) * 60 + scenarioCoverage * 25 + consistency * 15) : 0;
+  const skillAverages = Object.fromEntries(SKILL_IDS.map((skill) => {
+    const total = state.training.skillHistory.reduce((sum, entry) => sum + cleanInteger(entry[skill], 10), 0);
+    return [skill, state.training.skillHistory.length ? Math.round(total / state.training.skillHistory.length) : 0];
+  }));
+  const weakestSkill = state.training.skillHistory.length
+    ? SKILL_IDS.reduce((weakest, skill) => skillAverages[skill] < skillAverages[weakest] ? skill : weakest, SKILL_IDS[0])
+    : null;
+
+  return {
+    learningIndex,
+    averageScore: Number(averageScore.toFixed(1)),
+    rounds: state.training.rounds,
+    bestScore: state.training.best,
+    scenariosPracticed: state.training.scenarios.length,
+    weakestSkill,
+    lastPracticedAt: state.training.lastPracticedAt,
+    quotes: state.metrics.quotes,
+    closed: state.metrics.closed,
+    pendingFollowUps: state.followups.filter((item) => !item.done).length,
+    preparedFactoryItems: state.factory.length,
+  };
+}

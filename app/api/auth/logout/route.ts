@@ -1,7 +1,10 @@
 import { clearedSessionCookie, deleteSession } from "../_lib";
 import { clearedAdminCookie, deleteAdminSession } from "../../admin/_lib";
+import { rejectUntrustedMutation } from "../../_security";
 
 export async function POST(request: Request) {
+  const originError = rejectUntrustedMutation(request);
+  if (originError) return originError;
   try {
     await deleteSession(request);
     await deleteAdminSession(request);

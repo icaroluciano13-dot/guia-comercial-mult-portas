@@ -34,8 +34,11 @@ export function parseEmployeeProfile(body: unknown, options: { passwordRequired:
   if (!allowedBranches.has(branch)) {
     return { value: null, error: "Selecione Araraquara ou São Carlos." };
   }
-  if (options.passwordRequired && (password.length < 6 || password.length > 120)) {
-    return { value: null, error: "A senha deve ter pelo menos 6 caracteres." };
+  if (options.passwordRequired && (password.length < 8 || password.length > 120)) {
+    return { value: null, error: "A senha deve ter pelo menos 8 caracteres." };
+  }
+  if (!options.passwordRequired && password && password.length < 8) {
+    return { value: null, error: "A nova senha deve ter pelo menos 8 caracteres." };
   }
   if (!options.passwordRequired && password.length > 120) {
     return { value: null, error: "A nova senha deve ter no máximo 120 caracteres." };

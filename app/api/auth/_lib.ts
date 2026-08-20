@@ -1,10 +1,12 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { employeeSessions, employeeUsers } from "../../../db/schema";
 
 export const SESSION_COOKIE = "mp_employee_session";
 export const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
+export const LEGACY_PASSWORD_HASH_ITERATIONS = 100_000;
 export const PASSWORD_HASH_ITERATIONS = 100_000;
+const PASSWORD_HASH_ALGORITHM = "pbkdf2-sha256";
 
 export type EmployeeUser = {
   id: number;
@@ -30,18 +32,50 @@ export async function digest(value: string) {
   return encodeBytes(new Uint8Array(result));
 }
 
-export async function hashPassword(password: string, salt = makeToken()) {
+export async function hashPassword(password: string, salt = makeToken(), iterations = PASSWORD_HASH_ITERATIONS) {
+  // The hosted Worker enforces a hard PBKDF2 ceiling of 100,000 iterations.
+  // Keep the value explicit here so local Node tests cannot accidentally accept
+  // a hash configuration that production rejects.
+  if (iterations !== PASSWORD_HASH_ITERATIONS) {
+    throw new RangeError("Configuração de senha incompatível com o ambiente de produção.");
+  }
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), { name: "PBKDF2" }, false, ["deriveBits"]);
-  const derived = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: new TextEncoder().encode(salt), iterations: PASSWORD_HASH_ITERATIONS, hash: "SHA-256" }, key, 256);
+  const derived = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: new TextEncoder().encode(salt), iterations, hash: "SHA-256" }, key, 256);
   const hash = encodeBytes(new Uint8Array(derived));
-  return { salt, hash };
+  return { salt, hash, iterations, encoded: `${PASSWORD_HASH_ALGORITHM}$${iterations}$${salt}$${hash}` };
 }
 
 export async function verifyPassword(password: string, storedValue: string) {
-  const [salt, expectedHash] = storedValue.split(".");
-  if (!salt || !expectedHash) return false;
-  const actualHash = (await hashPassword(password, salt)).hash;
-  return actualHash === expectedHash;
+  const versioned = storedValue.split("$");
+  const isVersioned = versioned.length === 4 && versioned[0] === PASSWORD_HASH_ALGORITHM;
+  const iterations = isVersioned ? Number.parseInt(versioned[1], 10) : LEGACY_PASSWORD_HASH_ITERATIONS;
+  const salt = isVersioned ? versioned[2] : storedValue.split(".")[0];
+  const expectedHash = isVersioned ? versioned[3] : storedValue.split(".")[1];
+  if (!salt || !expectedHash || !Number.isInteger(iterations) || iterations !== PASSWORD_HASH_ITERATIONS) return false;
+  const actualHash = (await hashPassword(password, salt, iterations)).hash;
+  return constantTimeEqual(actualHash, expectedHash);
+}
+
+export function passwordNeedsRehash(storedValue: string) {
+  const [algorithm, iterationText] = storedValue.split("$");
+  return algorithm !== PASSWORD_HASH_ALGORITHM || Number.parseInt(iterationText, 10) !== PASSWORD_HASH_ITERATIONS;
+}
+
+export function passwordRequiresReset(storedValue: string) {
+  const [algorithm, iterationText] = storedValue.split("$");
+  const iterations = Number.parseInt(iterationText, 10);
+  return algorithm === PASSWORD_HASH_ALGORITHM && Number.isInteger(iterations) && iterations > PASSWORD_HASH_ITERATIONS;
+}
+
+export function constantTimeEqual(left: string, right: string) {
+  const leftBytes = new TextEncoder().encode(left);
+  const rightBytes = new TextEncoder().encode(right);
+  const length = Math.max(leftBytes.length, rightBytes.length);
+  let difference = leftBytes.length ^ rightBytes.length;
+  for (let index = 0; index < length; index += 1) {
+    difference |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0);
+  }
+  return difference === 0;
 }
 
 export function getCookie(request: Request, name: string) {
@@ -111,6 +145,7 @@ export async function getSessionUser(request: Request): Promise<EmployeeUser | n
 export async function createSession(request: Request, userId: number) {
   const token = makeToken();
   const db = await getDb();
+  await db.delete(employeeSessions).where(lt(employeeSessions.expiresAt, new Date().toISOString())).run();
   await db.insert(employeeSessions).values({
     userId,
     tokenHash: await digest(token),

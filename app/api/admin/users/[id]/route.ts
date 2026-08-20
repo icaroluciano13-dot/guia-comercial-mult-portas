@@ -4,6 +4,8 @@ import { employeeData, employeeSessions, employeeUsers } from "../../../../../db
 import { adminNotFound, getAdminSession } from "../../_lib";
 import { hashPassword, userPayload } from "../../../auth/_lib";
 import { parseEmployeeProfile } from "../_validation";
+import { rejectUntrustedMutation } from "../../../_security";
+import { normalizeEmployeeState, summarizeEmployeeState } from "../../../data/state-contract.mjs";
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -44,7 +46,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     if (row.stateJson) {
       try {
         const parsed = JSON.parse(row.stateJson) as unknown;
-        state = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+        state = normalizeEmployeeState(parsed);
       } catch {
         state = null;
       }
@@ -60,6 +62,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
         dataUpdatedAt: row.dataUpdatedAt,
       },
       state,
+      summary: summarizeEmployeeState(state),
     });
   } catch (error) {
     console.error("admin_user_data_failed", { message: error instanceof Error ? error.message : String(error) });
@@ -69,6 +72,8 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const originError = rejectUntrustedMutation(request);
+    if (originError) return originError;
     if (!(await getAdminSession(request))) return adminNotFound();
 
     const userId = await readUserId(context);
@@ -85,13 +90,27 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (!parsed.value) return jsonResponse({ error: parsed.error }, 400);
 
     const db = getDb();
-    const [existing] = await db.select({ id: employeeUsers.id }).from(employeeUsers).where(eq(employeeUsers.id, userId)).limit(1);
+    const [existing] = await db
+      .select({ id: employeeUsers.id })
+      .from(employeeUsers)
+      .where(eq(employeeUsers.id, userId))
+      .limit(1);
     if (!existing) return adminNotFound();
 
-    const [sameUsername] = await db.select({ id: employeeUsers.id }).from(employeeUsers).where(eq(employeeUsers.usernameNormalized, parsed.value.usernameNormalized)).limit(1);
+    const [sameUsername] = await db
+      .select({ id: employeeUsers.id })
+      .from(employeeUsers)
+      .where(eq(employeeUsers.usernameNormalized, parsed.value.usernameNormalized))
+      .limit(1);
     if (sameUsername && sameUsername.id !== userId) return jsonResponse({ error: "Esse usuário já está cadastrado." }, 409);
 
-    const values: { username: string; usernameNormalized: string; displayName: string; branch: string; passwordHash?: string } = {
+    const values: {
+      username: string;
+      usernameNormalized: string;
+      displayName: string;
+      branch: string;
+      passwordHash?: string;
+    } = {
       username: parsed.value.username,
       usernameNormalized: parsed.value.usernameNormalized,
       displayName: parsed.value.displayName,
@@ -99,12 +118,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     };
     if (parsed.value.password) {
       const passwordData = await hashPassword(parsed.value.password);
-      values.passwordHash = `${passwordData.salt}.${passwordData.hash}`;
+      values.passwordHash = passwordData.encoded;
     }
 
-    await db.update(employeeUsers).set(values).where(eq(employeeUsers.id, userId)).run();
-    if (values.passwordHash) await db.delete(employeeSessions).where(eq(employeeSessions.userId, userId)).run();
-    const [user] = await db.select({ id: employeeUsers.id, username: employeeUsers.username, displayName: employeeUsers.displayName, branch: employeeUsers.branch }).from(employeeUsers).where(eq(employeeUsers.id, userId)).limit(1);
+    if (values.passwordHash) {
+      await db.batch([
+        db.update(employeeUsers).set(values).where(eq(employeeUsers.id, userId)),
+        db.delete(employeeSessions).where(eq(employeeSessions.userId, userId)),
+      ]);
+    } else {
+      await db.update(employeeUsers).set(values).where(eq(employeeUsers.id, userId)).run();
+    }
+
+    const [user] = await db
+      .select({ id: employeeUsers.id, username: employeeUsers.username, displayName: employeeUsers.displayName, branch: employeeUsers.branch })
+      .from(employeeUsers)
+      .where(eq(employeeUsers.id, userId))
+      .limit(1);
     return jsonResponse({ user: user ? userPayload(user) : null });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -116,15 +146,26 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    const originError = rejectUntrustedMutation(request);
+    if (originError) return originError;
     if (!(await getAdminSession(request))) return adminNotFound();
+
     const userId = await readUserId(context);
     if (!userId) return adminNotFound();
+
     const db = getDb();
-    const [existing] = await db.select({ id: employeeUsers.id }).from(employeeUsers).where(eq(employeeUsers.id, userId)).limit(1);
+    const [existing] = await db
+      .select({ id: employeeUsers.id })
+      .from(employeeUsers)
+      .where(eq(employeeUsers.id, userId))
+      .limit(1);
     if (!existing) return adminNotFound();
-    await db.delete(employeeSessions).where(eq(employeeSessions.userId, userId)).run();
-    await db.delete(employeeData).where(eq(employeeData.userId, userId)).run();
-    await db.delete(employeeUsers).where(eq(employeeUsers.id, userId)).run();
+
+    await db.batch([
+      db.delete(employeeSessions).where(eq(employeeSessions.userId, userId)),
+      db.delete(employeeData).where(eq(employeeData.userId, userId)),
+      db.delete(employeeUsers).where(eq(employeeUsers.id, userId)),
+    ]);
     return jsonResponse({ ok: true, id: userId });
   } catch (error) {
     console.error("admin_user_delete_failed", { message: error instanceof Error ? error.message : String(error) });

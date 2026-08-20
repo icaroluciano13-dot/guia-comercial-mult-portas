@@ -2,6 +2,8 @@ import { eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { employeeData } from "../../../db/schema";
 import { getSessionUser } from "../auth/_lib";
+import { rejectUntrustedMutation } from "../_security";
+import { normalizeEmployeeState } from "./state-contract.mjs";
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return Response.json(body, {
@@ -13,6 +15,8 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
 function emptyResponse() {
   return jsonResponse({ state: null });
 }
+
+const MAX_REQUEST_BODY_LENGTH = 450_000;
 
 export async function GET(request: Request) {
   try {
@@ -32,7 +36,7 @@ async function readData(request: Request) {
 
   try {
     const state = JSON.parse(record.stateJson) as unknown;
-    return Response.json({ state: state && typeof state === "object" ? state : null }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ state: normalizeEmployeeState(state) }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return emptyResponse();
   }
@@ -47,12 +51,23 @@ export async function PUT(request: Request) {
 }
 
 async function writeData(request: Request) {
+  const originError = rejectUntrustedMutation(request);
+  if (originError) return originError;
+
   const user = await getSessionUser(request);
   if (!user) return jsonResponse({ error: "Sessão expirada." }, 401);
 
   let body: { state?: unknown };
   try {
-    const parsed = await request.json() as unknown;
+    const contentLength = Number(request.headers.get("content-length") ?? 0);
+    if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_LENGTH) {
+      return jsonResponse({ error: "Os dados enviados ultrapassaram o limite." }, 413);
+    }
+    const raw = await request.text();
+    if (raw.length > MAX_REQUEST_BODY_LENGTH) {
+      return jsonResponse({ error: "Os dados enviados ultrapassaram o limite." }, 413);
+    }
+    const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return jsonResponse({ error: "Dados inválidos." }, 400);
     }
@@ -65,7 +80,7 @@ async function writeData(request: Request) {
     return jsonResponse({ error: "Os dados do funcionário precisam estar em um objeto." }, 400);
   }
 
-  const stateJson = JSON.stringify(body.state);
+  const stateJson = JSON.stringify(normalizeEmployeeState(body.state));
   if (stateJson.length > 400_000) return jsonResponse({ error: "Os dados salvos ultrapassaram o limite." }, 413);
 
   const db = await getDb();
