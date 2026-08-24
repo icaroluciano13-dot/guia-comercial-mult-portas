@@ -13,6 +13,7 @@ exec node --experimental-loader "${SITES_PROJECT_ROOT}/tests/cloudflare-workers-
   "${SITES_PROJECT_ROOT}/tests/catalog-assets.test.mjs" \
   "${SITES_PROJECT_ROOT}/tests/coach-quality.test.mjs" \
   "${SITES_PROJECT_ROOT}/tests/password-hashing.test.mjs" \
+  "${SITES_PROJECT_ROOT}/tests/provider-messages.test.mjs" \
   "${SITES_PROJECT_ROOT}/tests/rendered-html.test.mjs" \
   "${SITES_PROJECT_ROOT}/tests/schema-bootstrap.test.mjs" \
   "${SITES_PROJECT_ROOT}/tests/security-contract.test.mjs" \

@@ -18,6 +18,13 @@ import {
   parseDalcomadKitPrice,
 } from "./lib/dalcomad-kit.mjs";
 import { downloadWorkbook } from "./lib/xlsx-export.mjs";
+import {
+  buildProviderMessage,
+  providerGoalOptions,
+  providerMessageExamples,
+  providerQuestionOptions,
+  providerTypeOptions,
+} from "./lib/provider-message.mjs";
 
 type Section = "overview" | "script" | "seller" | "training" | "timing" | "messages" | "factory" | "catalog" | "control" | "management";
 type BrandId = "dalcomad" | "destak" | "casmavi" | "aluan" | "brimak" | "brasil" | "crv" | "lucasa" | "riobras";
@@ -26,6 +33,7 @@ type TrainingLevel = "Básico" | "Intermediário" | "Avançado";
 type TrainingFilter = "Todos" | TrainingLevel;
 type QuickMessageChannel = "WhatsApp" | "Áudio";
 type QuickMessageTone = "Consultivo" | "Direto" | "Próximo";
+type QuickMessageAudience = "Cliente" | "Prestador";
 type SaveStatus = "idle" | "saving" | "saved" | "offline" | "error" | "conflict";
 type ToastKind = "success" | "error" | "info";
 
@@ -2572,6 +2580,7 @@ export default function Home() {
   const [activeTrainingScenario, setActiveTrainingScenario] = useState(0);
   const [activeTimingStep, setActiveTimingStep] = useState(0);
   const [brand, setBrand] = useState<BrandId>("dalcomad");
+  const [messageAudience, setMessageAudience] = useState<QuickMessageAudience>("Cliente");
   const [messageName, setMessageName] = useState("");
   const [messageLine, setMessageLine] = useState("Kit porta pronta");
   const [messageEnvironment, setMessageEnvironment] = useState("");
@@ -2580,6 +2589,11 @@ export default function Home() {
   const [messageChannel, setMessageChannel] = useState<QuickMessageChannel>("WhatsApp");
   const [messageTone, setMessageTone] = useState<QuickMessageTone>("Consultivo");
   const [messageProof, setMessageProof] = useState({ company: true, quality: true, guarantee: true });
+  const [providerName, setProviderName] = useState("");
+  const [providerType, setProviderType] = useState(providerTypeOptions[0]);
+  const [providerRegion, setProviderRegion] = useState("Araraquara e região");
+  const [providerObjective, setProviderObjective] = useState(providerGoalOptions[0]);
+  const [providerQuestion, setProviderQuestion] = useState(providerQuestionOptions[0]);
   const [catalogSearch, setCatalogSearch] = useState("");
   const [catalogFamily, setCatalogFamily] = useState("Todas");
   const [selectedCatalog, setSelectedCatalog] = useState<CatalogItem | null>(null);
@@ -2828,8 +2842,17 @@ export default function Home() {
           channel: QuickMessageChannel;
           tone: QuickMessageTone;
           proof: { company?: boolean; quality?: boolean; guarantee?: boolean };
+          audience: QuickMessageAudience;
+          provider: {
+            name?: string;
+            type?: string;
+            region?: string;
+            objective?: string;
+            question?: string;
+          };
         }>
         : {};
+      setMessageAudience(planner.audience === "Prestador" ? "Prestador" : "Cliente");
       setMessageName(typeof planner.name === "string" ? planner.name : "");
       setMessageLine(typeof planner.line === "string" && planner.line ? planner.line : "Kit porta pronta");
       setMessageEnvironment(typeof planner.environment === "string" ? planner.environment : "");
@@ -2842,6 +2865,11 @@ export default function Home() {
         quality: planner.proof?.quality !== false,
         guarantee: planner.proof?.guarantee !== false,
       });
+      setProviderName(typeof planner.provider?.name === "string" ? planner.provider.name : "");
+      setProviderType(typeof planner.provider?.type === "string" && planner.provider.type ? planner.provider.type : providerTypeOptions[0]);
+      setProviderRegion(typeof planner.provider?.region === "string" && planner.provider.region ? planner.provider.region : "Araraquara e região");
+      setProviderObjective(typeof planner.provider?.objective === "string" && planner.provider.objective ? planner.provider.objective : providerGoalOptions[0]);
+      setProviderQuestion(typeof planner.provider?.question === "string" && planner.provider.question ? planner.provider.question : providerQuestionOptions[0]);
       setSaveStatus(usingLocalBackup ? (navigator.onLine ? "saving" : "offline") : "saved");
       setToday(formatToday());
       skipNextAutosaveRef.current = !usingLocalBackup;
@@ -2916,7 +2944,7 @@ export default function Home() {
   useEffect(() => {
     if (!authUser || !hydrated || !dataLoaded) return;
     const state: PersistedGuideState = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       sales: doneSales,
       timing: doneTiming,
       followups: followUps,
@@ -2926,6 +2954,7 @@ export default function Home() {
       factory: factoryItems.map((item) => ({ ...item, manufacturer: "DALCOMAD" })),
       drawerChecks,
       messages: {
+        audience: messageAudience,
         name: messageName,
         line: messageLine,
         environment: messageEnvironment,
@@ -2934,6 +2963,13 @@ export default function Home() {
         channel: messageChannel,
         tone: messageTone,
         proof: messageProof,
+        provider: {
+          name: providerName,
+          type: providerType,
+          region: providerRegion,
+          objective: providerObjective,
+          question: providerQuestion,
+        },
       },
     };
 
@@ -2969,7 +3005,7 @@ export default function Home() {
       window.clearTimeout(timer);
       if (saveTimerRef.current === timer) saveTimerRef.current = null;
     };
-  }, [authUser, dailyDone, dataLoaded, doneSales, doneTiming, drawerChecks, factoryItems, flushPendingState, followUps, hydrated, messageChannel, messageEnvironment, messageLine, messageName, messageObjective, messageProof, messageQuestion, messageTone, metrics, trainingStats]);
+  }, [authUser, dailyDone, dataLoaded, doneSales, doneTiming, drawerChecks, factoryItems, flushPendingState, followUps, hydrated, messageAudience, messageChannel, messageEnvironment, messageLine, messageName, messageObjective, messageProof, messageQuestion, messageTone, metrics, providerName, providerObjective, providerQuestion, providerRegion, providerType, trainingStats]);
 
   useEffect(() => {
     if (!authUserId) return;
@@ -3123,25 +3159,46 @@ export default function Home() {
         : saveStatus === "saved"
           ? lastSavedAt ? `Salvo às ${lastSavedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}` : "Dados sincronizados"
           : "Preparando dados";
-  const quickMessage = useMemo(() => buildQuickMessage({
-    name: messageName,
-    line: messageLine,
-    environment: messageEnvironment,
-    objective: messageObjective,
-    question: messageQuestion,
-    channel: messageChannel,
-    tone: messageTone,
-    includeCompany: messageProof.company,
-    includeQuality: messageProof.quality,
-    includeGuarantee: messageProof.guarantee,
-  }), [messageChannel, messageEnvironment, messageLine, messageName, messageObjective, messageProof.company, messageProof.guarantee, messageProof.quality, messageQuestion, messageTone]);
+  const quickMessage = useMemo(() => messageAudience === "Prestador"
+    ? buildProviderMessage({
+      contactName: providerName,
+      senderName: authUser?.displayName || "",
+      providerType,
+      region: providerRegion,
+      objective: providerObjective,
+      question: providerQuestion,
+      channel: messageChannel,
+      tone: messageTone,
+      includeCompany: messageProof.company,
+      includePortfolio: messageProof.quality,
+      includeSupport: messageProof.guarantee,
+    })
+    : buildQuickMessage({
+      name: messageName,
+      line: messageLine,
+      environment: messageEnvironment,
+      objective: messageObjective,
+      question: messageQuestion,
+      channel: messageChannel,
+      tone: messageTone,
+      includeCompany: messageProof.company,
+      includeQuality: messageProof.quality,
+      includeGuarantee: messageProof.guarantee,
+    }), [authUser?.displayName, messageAudience, messageChannel, messageEnvironment, messageLine, messageName, messageObjective, messageProof.company, messageProof.guarantee, messageProof.quality, messageQuestion, messageTone, providerName, providerObjective, providerQuestion, providerRegion, providerType]);
   const messagePendingFields = useMemo(() => {
     const pending: string[] = [];
+    if (messageAudience === "Prestador") {
+      if (!providerType.trim()) pending.push("atividade do profissional");
+      if (!providerRegion.trim()) pending.push("cidade ou região de atendimento");
+      if (!providerQuestion.trim()) pending.push("pergunta para continuar a conversa");
+      pending.push("interesse na parceria e melhor canal de retorno");
+      return pending;
+    }
     if (!messageEnvironment.trim()) pending.push("Ambiente");
     if (!messageQuestion.trim()) pending.push("medida ou próxima pergunta");
     pending.push("modelo exato, composição e condição");
     return pending;
-  }, [messageEnvironment, messageQuestion]);
+  }, [messageAudience, messageEnvironment, messageQuestion, providerQuestion, providerRegion, providerType]);
 
   function showToast(message: string, kind: ToastKind = "success") {
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
@@ -4183,38 +4240,51 @@ export default function Home() {
 
         {section === "messages" && (
           <div className="page-content">
-            <div className="section-intro messages-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> CENTRAL DE MENSAGENS</span><h1>Uma mensagem certa.<br /><em>Para cada linha.</em></h1><p>Monte uma abertura curta para WhatsApp ou áudio, com o produto, o ambiente, o objetivo e a próxima pergunta já organizados.</p></div><div className="message-count"><strong>41</strong><span>anos para transmitir confiança</span><small>85 cidades atendidas</small></div></div>
+            <div className="section-intro messages-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> CENTRAL DE MENSAGENS</span><h1>{messageAudience === "Prestador" ? <>Uma boa apresentação.<br /><em>Para abrir parcerias.</em></> : <>Uma mensagem certa.<br /><em>Para cada linha.</em></>}</h1><p>{messageAudience === "Prestador" ? "Crie uma apresentação curta e profissional para pedreiros, instaladores, arquitetos e outros prestadores da construção." : "Monte uma abertura curta para WhatsApp ou áudio, com o produto, o ambiente, o objetivo e a próxima pergunta já organizados."}</p></div><div className="message-count"><strong>41</strong><span>anos para transmitir confiança</span><small>85 cidades atendidas</small></div></div>
 
-            <section className="message-trust panel"><div><span className="message-trust-icon">✓</span><div><strong>Prova institucional sem discurso pesado</strong><p>A mensagem pode ressaltar experiência, qualidade e garantia — depois volta para a necessidade real do cliente.</p></div></div><div className="message-trust-points"><span>41 anos</span><span>85 cidades</span><span>Qualidade</span><span>Garantia da linha</span></div></section>
+            <section className="message-audience-switch panel" aria-label="Escolher destinatário da mensagem"><div><span className="section-kicker">QUEM VAI RECEBER?</span><h2>Separe atendimento de prospecção</h2><p>Os dados de cliente e prestador ficam organizados em planejadores diferentes.</p></div><div className="message-audience-options"><button type="button" className={messageAudience === "Cliente" ? "active" : ""} aria-pressed={messageAudience === "Cliente"} onClick={() => setMessageAudience("Cliente")}><span>01</span><strong>Cliente</strong><small>Atendimento, produto e orçamento</small></button><button type="button" className={messageAudience === "Prestador" ? "active partner" : "partner"} aria-pressed={messageAudience === "Prestador"} onClick={() => setMessageAudience("Prestador")}><span>02</span><strong>Prestador / parceiro</strong><small>Apresentação e início de parceria</small></button></div></section>
+
+            <section className={`message-trust panel ${messageAudience === "Prestador" ? "partner" : ""}`}><div><span className="message-trust-icon">✓</span><div><strong>{messageAudience === "Prestador" ? "Apresente a empresa sem fazer um discurso de venda" : "Prova institucional sem discurso pesado"}</strong><p>{messageAudience === "Prestador" ? "Mostre quem é a Mult Portas, reconheça o trabalho do profissional e abra espaço para uma conversa simples." : "A mensagem pode ressaltar experiência, qualidade e garantia — depois volta para a necessidade real do cliente."}</p></div></div><div className="message-trust-points"><span>41 anos</span><span>85 cidades</span><span>{messageAudience === "Prestador" ? "Portfólio" : "Qualidade"}</span><span>{messageAudience === "Prestador" ? "Apoio técnico" : "Garantia da linha"}</span></div></section>
+            {messageAudience === "Prestador" && <div className="provider-contact-note"><span>✦</span><p><strong>Primeiro contato:</strong> apresente-se, reconheça a atuação do profissional e termine com uma pergunta simples. Deixe comissão, desconto e condição comercial para uma conversa posterior.</p></div>}
 
             <div className="message-layout">
               <section className="panel message-form-panel">
-                <div className="panel-heading"><div><span className="section-kicker">PLANEJADOR</span><h2>Preencha em menos de um minuto</h2></div><span className="planner-live"><span /> ao vivo</span></div>
+                <div className="panel-heading"><div><span className="section-kicker">PLANEJADOR</span><h2>{messageAudience === "Prestador" ? "Monte sua apresentação" : "Preencha em menos de um minuto"}</h2></div><span className="planner-live"><span /> ao vivo</span></div>
                 <div className="message-form-grid">
-                  <label><span>Nome do cliente (opcional)</span><input value={messageName} onChange={(event) => setMessageName(event.target.value)} placeholder="Ex.: João" /></label>
-                  <label><span>Linha ou produto</span><input value={messageLine} onChange={(event) => setMessageLine(event.target.value)} placeholder="Ex.: porta de alumínio" /></label>
-                  <div className="message-suggestions"><span>Atalhos de linha</span><div>{quickLineOptions.map((line) => <button key={line} type="button" className={messageLine === line ? "active" : ""} onClick={() => setMessageLine(line)}>{line}</button>)}</div></div>
-                  <div className="message-brand-suggestions"><span>Usar uma marca do catálogo</span><div>{(Object.keys(brandData) as BrandId[]).map((id) => <button key={id} type="button" onClick={() => setMessageLine(brandData[id].descriptor)}><i style={{ background: brandData[id].accent }} />{brandData[id].short}</button>)}</div></div>
-                  <label><span>Ambiente</span><select value={messageEnvironment} onChange={(event) => setMessageEnvironment(event.target.value)}><option value="">Escolha ou deixe para confirmar</option><option>entrada / fachada</option><option>sala ou área social</option><option>quarto</option><option>banheiro</option><option>cozinha ou lavanderia</option><option>obra em volume</option></select></label>
-                  <label><span>Objetivo do cliente</span><select value={messageObjective} onChange={(event) => setMessageObjective(event.target.value)}><option>apresentar uma opção de qualidade</option><option>ganhar praticidade na obra</option><option>otimizar espaço</option><option>comparar custo-benefício</option><option>valorizar o acabamento</option><option>resolver vários ambientes</option><option>pedir as medidas do vão</option><option>retomar o orçamento</option><option>responder a uma dúvida</option><option>combinar o próximo passo</option></select></label>
+                  {messageAudience === "Prestador" ? <>
+                    <label><span>Nome do prestador (opcional)</span><input value={providerName} onChange={(event) => setProviderName(event.target.value)} placeholder="Ex.: Carlos" /></label>
+                    <label><span>Atividade profissional</span><select value={providerType} onChange={(event) => setProviderType(event.target.value)}>{providerTypeOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
+                    <div className="message-suggestions"><span>Atalhos de profissão</span><div>{providerTypeOptions.map((option) => <button key={option} type="button" className={providerType === option ? "active" : ""} onClick={() => setProviderType(option)}>{option}</button>)}</div></div>
+                    <label><span>Cidade ou região</span><input value={providerRegion} onChange={(event) => setProviderRegion(event.target.value)} placeholder="Ex.: Araraquara e região" /></label>
+                    <label><span>Objetivo do contato</span><select value={providerObjective} onChange={(event) => setProviderObjective(event.target.value)}>{providerGoalOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
+                    <label className="message-question"><span>Pergunta para continuar a conversa</span><input value={providerQuestion} onChange={(event) => setProviderQuestion(event.target.value)} placeholder="Ex.: você atende obras na região?" /></label>
+                    <div className="message-suggestions provider-question-suggestions"><span>Próximos passos sugeridos</span><div>{providerQuestionOptions.map((option) => <button key={option} type="button" className={providerQuestion === option ? "active" : ""} onClick={() => setProviderQuestion(option)}>{option}</button>)}</div></div>
+                  </> : <>
+                    <label><span>Nome do cliente (opcional)</span><input value={messageName} onChange={(event) => setMessageName(event.target.value)} placeholder="Ex.: João" /></label>
+                    <label><span>Linha ou produto</span><input value={messageLine} onChange={(event) => setMessageLine(event.target.value)} placeholder="Ex.: porta de alumínio" /></label>
+                    <div className="message-suggestions"><span>Atalhos de linha</span><div>{quickLineOptions.map((line) => <button key={line} type="button" className={messageLine === line ? "active" : ""} onClick={() => setMessageLine(line)}>{line}</button>)}</div></div>
+                    <div className="message-brand-suggestions"><span>Usar uma marca do catálogo</span><div>{(Object.keys(brandData) as BrandId[]).map((id) => <button key={id} type="button" onClick={() => setMessageLine(brandData[id].descriptor)}><i style={{ background: brandData[id].accent }} />{brandData[id].short}</button>)}</div></div>
+                    <label><span>Ambiente</span><select value={messageEnvironment} onChange={(event) => setMessageEnvironment(event.target.value)}><option value="">Escolha ou deixe para confirmar</option><option>entrada / fachada</option><option>sala ou área social</option><option>quarto</option><option>banheiro</option><option>cozinha ou lavanderia</option><option>obra em volume</option></select></label>
+                    <label><span>Objetivo do cliente</span><select value={messageObjective} onChange={(event) => setMessageObjective(event.target.value)}><option>apresentar uma opção de qualidade</option><option>ganhar praticidade na obra</option><option>otimizar espaço</option><option>comparar custo-benefício</option><option>valorizar o acabamento</option><option>resolver vários ambientes</option><option>pedir as medidas do vão</option><option>retomar o orçamento</option><option>responder a uma dúvida</option><option>combinar o próximo passo</option></select></label>
+                    <label className="message-question"><span>Próxima pergunta (opcional)</span><input value={messageQuestion} onChange={(event) => setMessageQuestion(event.target.value)} placeholder="Ex.: você já tem a medida do vão?" /></label>
+                  </>}
                   <label><span>Canal</span><select value={messageChannel} onChange={(event) => setMessageChannel(event.target.value as QuickMessageChannel)}><option>WhatsApp</option><option>Áudio</option></select></label>
                   <label><span>Tom da mensagem</span><select value={messageTone} onChange={(event) => setMessageTone(event.target.value as QuickMessageTone)}><option>Consultivo</option><option>Direto</option><option>Próximo</option></select></label>
-                  <label className="message-question"><span>Próxima pergunta (opcional)</span><input value={messageQuestion} onChange={(event) => setMessageQuestion(event.target.value)} placeholder="Ex.: você já tem a medida do vão?" /></label>
                 </div>
-                <div className="message-proof-options"><span className="section-kicker">O QUE RESSALTAR</span><label><input type="checkbox" checked={messageProof.company} onChange={(event) => setMessageProof((current) => ({ ...current, company: event.target.checked }))} /><span className="fake-checkbox">✓</span>41 anos e 85 cidades</label><label><input type="checkbox" checked={messageProof.quality} onChange={(event) => setMessageProof((current) => ({ ...current, quality: event.target.checked }))} /><span className="fake-checkbox">✓</span>Qualidade</label><label><input type="checkbox" checked={messageProof.guarantee} onChange={(event) => setMessageProof((current) => ({ ...current, guarantee: event.target.checked }))} /><span className="fake-checkbox">✓</span>Garantia da linha</label></div>
+                <div className="message-proof-options"><span className="section-kicker">O QUE RESSALTAR</span><label><input type="checkbox" checked={messageProof.company} onChange={(event) => setMessageProof((current) => ({ ...current, company: event.target.checked }))} /><span className="fake-checkbox">✓</span>41 anos e 85 cidades</label><label><input type="checkbox" checked={messageProof.quality} onChange={(event) => setMessageProof((current) => ({ ...current, quality: event.target.checked }))} /><span className="fake-checkbox">✓</span>{messageAudience === "Prestador" ? "Portfólio de portas e esquadrias" : "Qualidade"}</label><label><input type="checkbox" checked={messageProof.guarantee} onChange={(event) => setMessageProof((current) => ({ ...current, guarantee: event.target.checked }))} /><span className="fake-checkbox">✓</span>{messageAudience === "Prestador" ? "Apoio na especificação" : "Garantia da linha"}</label></div>
               </section>
 
               <section className="panel message-preview-panel">
-                <div className="message-preview-head"><div><span className="section-kicker">PRÉVIA PRONTA</span><h2>{messageChannel === "Áudio" ? "Roteiro para falar" : "Mensagem para enviar"}</h2></div><div className="message-preview-actions"><button className="copy-button" onClick={() => speakText(quickMessage, "quick-message")}>{speakingMessageId === "quick-message" ? "Parar áudio" : "Ouvir"} <span>{speakingMessageId === "quick-message" ? "■" : "▶"}</span></button><button className="copy-button" onClick={() => copyMessage(quickMessage, messageChannel === "Áudio" ? "Roteiro de áudio" : "Mensagem")}>Copiar {messageChannel === "Áudio" ? "roteiro" : "mensagem"} <span>⧉</span></button></div></div>
-                <div className={`message-preview-bubble ${messageChannel === "Áudio" ? "audio" : ""}`} aria-live="polite"><div className="preview-label"><span>{messageChannel === "Áudio" ? "GUIA DE ÁUDIO" : "WHATSAPP"}</span><span>{messageTone.toUpperCase()}</span></div><p>{quickMessage}</p></div>
-                <div className="message-next"><span className="mini-label">POR QUE FUNCIONA</span><p>Apresenta a linha, transmite confiança e termina com uma pergunta objetiva. Assim a conversa continua humana, sem parecer uma resposta automática.</p></div>
-                <div className="message-checklist"><span className="mini-label">ANTES DE ENVIAR</span><div><span>✓ cite o ambiente</span><span>✓ adapte o objetivo</span><span>✓ confirme medida, modelo e garantia</span></div></div>
-                <div className="message-pending"><span className="mini-label">AINDA PENDENTE NO ATENDIMENTO</span><p>{messagePendingFields.map((field, index) => <span key={field}>A confirmar: {field}{index < messagePendingFields.length - 1 ? " · " : ""}</span>)}</p></div>
-                <button className="button dark full" onClick={() => copyMessage(quickMessage, messageChannel === "Áudio" ? "Roteiro de áudio" : "Mensagem")}>{messageChannel === "Áudio" ? "Copiar roteiro de áudio" : "Copiar para o WhatsApp"} <span>⧉</span></button>
+                <div className="message-preview-head"><div><span className="section-kicker">PRÉVIA PRONTA</span><h2>{messageAudience === "Prestador" ? (messageChannel === "Áudio" ? "Apresentação para falar" : "Apresentação para enviar") : (messageChannel === "Áudio" ? "Roteiro para falar" : "Mensagem para enviar")}</h2></div><div className="message-preview-actions"><button className="copy-button" onClick={() => speakText(quickMessage, "quick-message")}>{speakingMessageId === "quick-message" ? "Parar áudio" : "Ouvir"} <span>{speakingMessageId === "quick-message" ? "■" : "▶"}</span></button><button className="copy-button" onClick={() => copyMessage(quickMessage, messageChannel === "Áudio" ? "Roteiro de áudio" : messageAudience === "Prestador" ? "Apresentação" : "Mensagem")}>Copiar {messageChannel === "Áudio" ? "roteiro" : "mensagem"} <span>⧉</span></button></div></div>
+                <div className={`message-preview-bubble ${messageChannel === "Áudio" ? "audio" : ""} ${messageAudience === "Prestador" ? "partner" : ""}`} aria-live="polite"><div className="preview-label"><span>{messageChannel === "Áudio" ? "GUIA DE ÁUDIO" : messageAudience === "Prestador" ? "PARCERIA · WHATSAPP" : "WHATSAPP"}</span><span>{messageTone.toUpperCase()}</span></div><p>{quickMessage}</p></div>
+                <div className="message-next"><span className="mini-label">POR QUE FUNCIONA</span><p>{messageAudience === "Prestador" ? "Apresenta quem você é, reconhece o trabalho do profissional e abre uma conversa sem tentar vender tudo no primeiro contato." : "Apresenta a linha, transmite confiança e termina com uma pergunta objetiva. Assim a conversa continua humana, sem parecer uma resposta automática."}</p></div>
+                <div className="message-checklist"><span className="mini-label">ANTES DE ENVIAR</span><div>{messageAudience === "Prestador" ? <><span>✓ confirme a atividade</span><span>✓ cite a região</span><span>✓ faça uma pergunta simples</span></> : <><span>✓ cite o ambiente</span><span>✓ adapte o objetivo</span><span>✓ confirme medida, modelo e garantia</span></>}</div></div>
+                <div className="message-pending"><span className="mini-label">{messageAudience === "Prestador" ? "CONFIRME DEPOIS DO PRIMEIRO CONTATO" : "AINDA PENDENTE NO ATENDIMENTO"}</span><p>{messagePendingFields.map((field, index) => <span key={field}>A confirmar: {field}{index < messagePendingFields.length - 1 ? " · " : ""}</span>)}</p></div>
+                <button className="button dark full" onClick={() => copyMessage(quickMessage, messageChannel === "Áudio" ? "Roteiro de áudio" : messageAudience === "Prestador" ? "Apresentação" : "Mensagem")}>{messageChannel === "Áudio" ? "Copiar roteiro de áudio" : messageAudience === "Prestador" ? "Copiar apresentação" : "Copiar para o WhatsApp"} <span>⧉</span></button>
               </section>
             </div>
 
-            <section className="message-examples"><div className="section-intro-mini"><span className="section-kicker">ABERTURAS QUE PODEM SER ADAPTADAS</span><h2>Comece simples. Personalize na resposta.</h2></div><div className="message-example-grid">{openingRecommendations.slice(0, 4).map((item) => <article key={item.id}><span>{item.tag}</span><strong>{item.title}</strong><p>{item.message}</p><button className="copy-button" onClick={() => copyMessage(item.message)}>Copiar exemplo <span>⧉</span></button></article>)}</div></section>
+            <section className="message-examples"><div className="section-intro-mini"><span className="section-kicker">{messageAudience === "Prestador" ? "APRESENTAÇÕES PRONTAS PARA ADAPTAR" : "ABERTURAS QUE PODEM SER ADAPTADAS"}</span><h2>{messageAudience === "Prestador" ? "Comece uma parceria sem parecer uma mensagem automática." : "Comece simples. Personalize na resposta."}</h2></div><div className="message-example-grid">{(messageAudience === "Prestador" ? providerMessageExamples : openingRecommendations.slice(0, 4)).map((item) => <article key={item.id}><span>{item.tag}</span><strong>{item.title}</strong><p>{item.message}</p><button className="copy-button" onClick={() => copyMessage(item.message, messageAudience === "Prestador" ? "Apresentação" : "Exemplo")}>{messageAudience === "Prestador" ? "Copiar apresentação" : "Copiar exemplo"} <span>⧉</span></button></article>)}</div></section>
           </div>
         )}
 

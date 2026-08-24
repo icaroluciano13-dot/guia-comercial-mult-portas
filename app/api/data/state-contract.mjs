@@ -7,7 +7,7 @@ import {
   parseDalcomadKitPrice,
 } from "../../lib/dalcomad-kit.mjs";
 
-export const GUIDE_STATE_VERSION = 2;
+export const GUIDE_STATE_VERSION = 3;
 
 const MAX_COLLECTION = 240;
 const SKILL_IDS = ["acolhimento", "diagnostico", "precisao", "valor", "proximoPasso"];
@@ -106,7 +106,9 @@ function normalizeFollowUps(value) {
 function normalizeMessages(value) {
   const source = isRecord(value) ? value : {};
   const proof = isRecord(source.proof) ? source.proof : {};
+  const provider = isRecord(source.provider) ? source.provider : {};
   return {
+    audience: source.audience === "Prestador" ? "Prestador" : "Cliente",
     name: cleanString(source.name, 120),
     line: cleanString(source.line, 160),
     environment: cleanString(source.environment, 160),
@@ -118,6 +120,13 @@ function normalizeMessages(value) {
       company: proof.company !== false,
       quality: proof.quality !== false,
       guarantee: proof.guarantee !== false,
+    },
+    provider: {
+      name: cleanString(provider.name, 120),
+      type: cleanString(provider.type, 160),
+      region: cleanString(provider.region, 160),
+      objective: cleanString(provider.objective, 240),
+      question: cleanString(provider.question, 240),
     },
   };
 }
