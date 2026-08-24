@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const developmentPreviewMeta =
@@ -33,7 +34,14 @@ test("renders without temporary development metadata", async () => {
 });
 
 test("robots policy keeps the internal guide out of search indexes", async () => {
-  const { readFile } = await import("node:fs/promises");
   const robots = await readFile(new URL("../public/robots.txt", import.meta.url), "utf8");
   assert.match(robots, /^User-agent: \*\nDisallow: \/\s*$/);
+});
+
+test("GitHub Pages build remains a safe redirect to the hosted guide", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const redirectSource = await readFile(new URL("../scripts/build-github-redirect.mjs", import.meta.url), "utf8");
+  assert.equal(packageJson.scripts["build:github"], "node scripts/build-github-redirect.mjs");
+  assert.match(redirectSource, /guia-comercial-mult-portas\.eletrovale-cont\.chatgpt\.site/);
+  assert.match(redirectSource, /noindex, nofollow/);
 });
