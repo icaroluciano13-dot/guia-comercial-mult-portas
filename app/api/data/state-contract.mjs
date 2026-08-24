@@ -1,3 +1,12 @@
+import {
+  dalcomadKitFillings,
+  dalcomadKitRequadros,
+  isEligibleDalcomadKitItem,
+  isKnownDalcomadKitCombination,
+  normalizeDalcomadKitSelection,
+  parseDalcomadKitPrice,
+} from "../../lib/dalcomad-kit.mjs";
+
 export const GUIDE_STATE_VERSION = 2;
 
 const MAX_COLLECTION = 240;
@@ -28,13 +37,15 @@ function cleanStringArray(value, maxItems = MAX_COLLECTION, maxLength = 120) {
 
 function normalizeMetrics(value) {
   const source = isRecord(value) ? value : {};
+  const quotes = cleanInteger(source.quotes);
+  const officialQuotes = Math.min(cleanInteger(source.officialQuotes), quotes);
   return {
     leads: cleanInteger(source.leads),
-    quotes: cleanInteger(source.quotes),
-    officialQuotes: cleanInteger(source.officialQuotes),
-    incompleteQuotes: cleanInteger(source.incompleteQuotes),
-    followups: cleanInteger(source.followups),
-    closed: cleanInteger(source.closed),
+    quotes,
+    officialQuotes,
+    incompleteQuotes: Math.min(cleanInteger(source.incompleteQuotes), Math.max(0, quotes - officialQuotes)),
+    followups: Math.min(cleanInteger(source.followups), quotes),
+    closed: Math.min(cleanInteger(source.closed), quotes),
     ticket: cleanNumber(source.ticket, 100_000_000),
   };
 }
@@ -112,16 +123,45 @@ function normalizeMessages(value) {
 }
 
 function normalizeFactory(value) {
-  if (!Array.isArray(value)) return [];
-  const fields = ["description", "opening", "leafMeasure", "requadro", "color", "line", "finish", "filling", "priceWithoutLock", "priceWithLock"];
-  return value.filter(isRecord).slice(-MAX_COLLECTION).map((item, index) => {
+  const legacy = isRecord(value) ? value : {};
+  const items = Array.isArray(value) ? value : Array.isArray(legacy.items) ? legacy.items : [];
+  const legacyColor = cleanString(legacy.color, 180);
+  const legacyFinish = cleanString(legacy.finish, 180);
+  return items.filter(isRecord).flatMap((item, index) => {
+    const id = cleanString(item.id, 80) || `item-${index + 1}`;
+    if (id.startsWith("sample-") || !isEligibleDalcomadKitItem(item)) return [];
+    const selection = normalizeDalcomadKitSelection(item, { color: legacyColor, finish: legacyFinish });
+    if (!isKnownDalcomadKitCombination(selection)) return [];
+    const requadroValue = cleanString(item.requadro, 180).toLocaleUpperCase("pt-BR");
+    const fillingValue = cleanString(item.filling, 180).toLocaleUpperCase("pt-BR");
+    const withoutLock = parseDalcomadKitPrice(item.priceWithoutLock);
+    const withLock = parseDalcomadKitPrice(item.priceWithLock);
     const normalized = {
       id: cleanString(item.id, 80) || `item-${index + 1}`,
       manufacturer: "DALCOMAD",
+      description: "KIT PORTA",
+      opening: "ABRIR",
+      leafMeasure: cleanString(item.leafMeasure, 180),
+      requadro: requadroValue === "A CONFIRMAR" ? "A confirmar" : dalcomadKitRequadros.includes(requadroValue) ? requadroValue : "",
+      color: selection.color,
+      line: selection.line,
+      finish: selection.finish,
+      filling: fillingValue === "A CONFIRMAR" ? "A confirmar" : dalcomadKitFillings.includes(fillingValue) ? fillingValue : "",
+      priceWithoutLock: withoutLock === null || withoutLock === "" ? "" : String(withoutLock),
+      priceWithLock: withLock === null || withLock === "" ? "" : String(withLock),
     };
-    for (const field of fields) normalized[field] = cleanString(item[field], 180);
-    return normalized;
-  });
+    const hasTechnicalContent = [
+      normalized.leafMeasure,
+      normalized.requadro,
+      normalized.color,
+      normalized.line,
+      normalized.finish,
+      normalized.filling,
+      normalized.priceWithoutLock,
+      normalized.priceWithLock,
+    ].some(Boolean);
+    return hasTechnicalContent ? [normalized] : [];
+  }).slice(-MAX_COLLECTION);
 }
 
 function normalizeDrawerChecks(value) {

@@ -36,14 +36,14 @@ test("employee state is bounded and ignores unknown or unsafe fields", () => {
 
   assert.equal("secret" in state, false);
   assert.equal(state.metrics.quotes, 0);
-  assert.equal(state.metrics.closed, 3);
+  assert.equal(state.metrics.closed, 0);
   assert.equal(state.metrics.ticket, 0);
   assert.deepEqual(state.training.scoreHistory, [0, 6, 10]);
   assert.equal(state.training.skillHistory[0].acolhimento, 10);
   assert.equal(state.training.skillHistory[0].diagnostico, 0);
   assert.equal(Object.hasOwn(state.training.scenarioStats, "__proto__"), false);
   assert.equal(Object.hasOwn(state.drawerChecks, "__proto__"), false);
-  assert.equal(state.factory[0].manufacturer, "DALCOMAD");
+  assert.deepEqual(state.factory, []);
   assert.deepEqual(state.followups[0], {
     id: "one",
     client: "Cliente",
@@ -52,6 +52,67 @@ test("employee state is bounded and ignores unknown or unsafe fields", () => {
     priority: "Média",
     done: false,
   });
+});
+
+test("factory migration preserves legacy Dalcomad kits and enforces the fixed scope", () => {
+  const state = normalizeEmployeeState({
+    factory: {
+      color: "BRANCO",
+      finish: "PET",
+      items: [{
+        id: "legacy-1",
+        manufacturer: "DALCOMAD",
+        description: "KIT PORTA PRONTA",
+        opening: "ABRIR",
+        leafMeasure: "0,80 x 2,10",
+        requadro: "18cm",
+        line: "ECO",
+        filling: "colméia",
+        priceWithoutLock: 1234.5,
+        priceWithLock: "R$ 1.399,90",
+      }],
+    },
+  });
+
+  assert.deepEqual(state.factory, [{
+    id: "legacy-1",
+    manufacturer: "DALCOMAD",
+    description: "KIT PORTA",
+    opening: "ABRIR",
+    leafMeasure: "0,80 x 2,10",
+    requadro: "18CM",
+    color: "BRANCO DIAMANTE",
+    line: "ECO",
+    finish: "PET/PVC TX",
+    filling: "COLMÉIA",
+    priceWithoutLock: "1234.5",
+    priceWithLock: "1399.9",
+  }]);
+});
+
+test("factory and metrics reject contradictory or impossible values", () => {
+  const state = normalizeEmployeeState({
+    metrics: { quotes: 5, officialQuotes: 4, incompleteQuotes: 4, followups: 9, closed: 8 },
+    factory: [
+      { id: "empty", manufacturer: "DALCOMAD", description: "KIT PORTA", opening: "ABRIR" },
+      { id: "invalid", manufacturer: "DALCOMAD", description: "KIT PORTA", opening: "ABRIR", line: "ECO", finish: "RENOLIT", color: "BLACK SP", priceWithoutLock: "-10" },
+      { id: "wrong-scope", manufacturer: "OUTRA", description: "FOLHA DE PORTA", opening: "CORRER", leafMeasure: "0,80 x 2,10" },
+    ],
+  });
+  assert.deepEqual(state.metrics, {
+    leads: 0,
+    quotes: 5,
+    officialQuotes: 4,
+    incompleteQuotes: 1,
+    followups: 5,
+    closed: 5,
+    ticket: 0,
+  });
+  assert.equal(state.factory.length, 1);
+  assert.equal(state.factory[0].line, "ECO");
+  assert.equal(state.factory[0].finish, "PET/PVC TX");
+  assert.equal(state.factory[0].color, "");
+  assert.equal(state.factory[0].priceWithoutLock, "");
 });
 
 test("learning summary is deterministic and account-scoped", () => {

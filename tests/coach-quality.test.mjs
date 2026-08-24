@@ -49,7 +49,8 @@ test("generative coach uses current configurable model and privacy controls", as
 test("guided mode emits only curated customer-role scenario messages", async () => {
   const source = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(source, /import \{ guidedCustomerReply \}/);
-  assert.match(source, /customerReply: guidedCustomerReply\(scenario, signals\)/);
+  assert.match(source, /customerReply: guidedCustomerReply\(scenario, progressionSignals\)/);
+  assert.match(source, /history\.filter\(\(message\) => message\.role === "seller"\)/);
   assert.doesNotMatch(source, /customerReply: sanitizeGuidedCustomerReply/);
 });
 

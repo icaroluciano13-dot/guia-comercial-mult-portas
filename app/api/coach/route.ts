@@ -100,7 +100,7 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 function cleanList(value: unknown, fallback: string) {
   if (!Array.isArray(value)) return [fallback];
   const cleaned = value
-    .filter((item): item is string => typeof item === "string" && item.trim())
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
     .map((item) => item.trim().slice(0, 240))
     .slice(0, 3);
   return cleaned.length ? cleaned : [fallback];
@@ -137,7 +137,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cleanStringList(value: unknown, maxItems = 12, maxLength = 120) {
   return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && item.trim()).map((item) => item.trim().slice(0, maxLength)).slice(0, maxItems)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim().slice(0, maxLength)).slice(0, maxItems)
     : [];
 }
 

@@ -7,11 +7,15 @@ import {
   availableDalcomadKitValues,
   dalcomadKitColors,
   dalcomadKitCombinations,
+  dalcomadKitFillings,
   dalcomadKitFinishes,
   dalcomadKitLines,
-  dalcomadKitSwatches,
+  dalcomadKitRequadros,
+  getDalcomadKitSwatch,
+  isEligibleDalcomadKitItem,
   isKnownDalcomadKitCombination,
   normalizeDalcomadKitSelection,
+  parseDalcomadKitPrice,
 } from "./lib/dalcomad-kit.mjs";
 import { downloadWorkbook } from "./lib/xlsx-export.mjs";
 
@@ -22,7 +26,8 @@ type TrainingLevel = "Básico" | "Intermediário" | "Avançado";
 type TrainingFilter = "Todos" | TrainingLevel;
 type QuickMessageChannel = "WhatsApp" | "Áudio";
 type QuickMessageTone = "Consultivo" | "Direto" | "Próximo";
-type SaveStatus = "idle" | "saving" | "saved" | "offline" | "error";
+type SaveStatus = "idle" | "saving" | "saved" | "offline" | "error" | "conflict";
+type ToastKind = "success" | "error" | "info";
 
 type EmployeeUser = {
   id: number;
@@ -280,24 +285,7 @@ const factoryHeaders = [
   "VALOR C/ FECH CR.",
 ];
 
-const factoryFieldConfig: { key: FactoryField; label: string; placeholder: string; listId?: string }[] = [
-  { key: "manufacturer", label: "Fabricante", placeholder: "DALCOMAD", listId: "factory-manufacturers" },
-  { key: "description", label: "Descrição", placeholder: "KIT PORTA" },
-  { key: "opening", label: "Abertura", placeholder: "ABRIR" },
-  { key: "leafMeasure", label: "Medida do kit", placeholder: "0,70 x 2,10" },
-  { key: "requadro", label: "Requadro", placeholder: "18CM", listId: "factory-requadros" },
-  { key: "color", label: "Cor", placeholder: "CINZA URBAN", listId: "factory-colors" },
-  { key: "line", label: "Linha", placeholder: "ECO", listId: "factory-lines" },
-  { key: "finish", label: "Acabamento", placeholder: "PET/PVC TX", listId: "factory-finishes" },
-  { key: "filling", label: "Preenchimento", placeholder: "BOONDOOR", listId: "factory-fillings" },
-  { key: "priceWithoutLock", label: "Valor sem fechadura", placeholder: "R$" },
-  { key: "priceWithLock", label: "Valor com fechadura CR.", placeholder: "R$" },
-];
-
-const dalcomadKitFillings = ["BOONDOOR", "COLMÉIA"];
-const dalcomadKitRequadros = ["11CM", "14CM", "16CM", "18CM", "20CM"];
-
-const factoryListOptions: Record<string, string[]> = {
+const factoryListOptions: Record<string, readonly string[]> = {
   manufacturers: ["DALCOMAD"],
   descriptions: ["KIT PORTA"],
   openings: ["ABRIR"],
@@ -320,7 +308,7 @@ const factoryWizardSteps: { key: FactoryWizardField; label: string; title: strin
   { key: "priceWithLock", label: "Valor com fechadura", title: "Qual é o valor com fechadura CR.?", hint: "Campo opcional. Digite o valor informado pela fábrica; nenhum cálculo é feito automaticamente.", placeholder: "R$ 0,00", optional: true },
 ];
 
-const factoryWizardOptions: Record<FactoryWizardField, string[]> = {
+const factoryWizardOptions: Record<FactoryWizardField, readonly string[]> = {
   leafMeasure: [],
   requadro: factoryListOptions.requadros,
   color: factoryListOptions.colors,
@@ -378,11 +366,13 @@ function normalizeFactoryState(value: unknown): FactoryRequestItem[] {
   return items
     // Remove as linhas de demonstração e os espaços vazios da versão antiga.
     // Somente os kits Dalcomad enviados continuam disponíveis para exportação.
-    .filter((item) => !item.id.startsWith("sample-") && item.description.trim().toLocaleUpperCase("pt-BR") === "KIT PORTA" && hasFactoryContent(item))
+    .filter((item) => !item.id.startsWith("sample-") && isEligibleDalcomadKitItem(item) && hasFactoryContent(item))
     .map((item) => {
       const selection = normalizeDalcomadKitSelection(item, { color: legacyColor, finish: legacyFinish });
       const normalizedRequadro = item.requadro.trim().toLocaleUpperCase("pt-BR");
       const normalizedFilling = item.filling.trim().toLocaleUpperCase("pt-BR");
+      const withoutLock = parseDalcomadKitPrice(item.priceWithoutLock);
+      const withLock = parseDalcomadKitPrice(item.priceWithLock);
       return {
         ...item,
         manufacturer: "DALCOMAD",
@@ -393,22 +383,17 @@ function normalizeFactoryState(value: unknown): FactoryRequestItem[] {
         line: selection.line,
         finish: selection.finish,
         filling: normalizedFilling === "A CONFIRMAR" ? "A confirmar" : dalcomadKitFillings.includes(normalizedFilling) ? normalizedFilling : "",
+        priceWithoutLock: withoutLock === null || withoutLock === "" ? "" : String(withoutLock),
+        priceWithLock: withLock === null || withLock === "" ? "" : String(withLock),
       };
-    });
+    })
+    .filter((item) => isKnownDalcomadKitCombination(item) && hasFactoryContent(item))
+    .slice(-240);
 }
 
 function hasFactoryContent(item: FactoryRequestItem) {
-  return factoryFieldConfig.some(({ key }) => key !== "manufacturer" && item[key].trim().length > 0);
-}
-
-function parseFactoryPrice(value: string): number | string {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  const withoutCurrency = trimmed.replace(/^R\$\s*/i, "").replace(/\s/g, "");
-  const normalized = withoutCurrency.includes(",")
-    ? withoutCurrency.replace(/\./g, "").replace(",", ".")
-    : withoutCurrency;
-  return /^-?\d+(?:\.\d{1,2})?$/.test(normalized) ? Number(normalized) : trimmed;
+  return (["leafMeasure", "requadro", "color", "line", "finish", "filling", "priceWithoutLock", "priceWithLock"] as FactoryField[])
+    .some((key) => item[key].trim().length > 0);
 }
 
 const STORAGE = {
@@ -435,8 +420,19 @@ function safelyParseJson(value: string | null): unknown {
   }
 }
 
-function apiFetch(path: string, init: RequestInit = {}) {
-  return fetch(path, { ...init, credentials: "same-origin" });
+async function apiFetch(path: string, init: RequestInit = {}, timeoutMs = 15_000) {
+  const controller = new AbortController();
+  const sourceSignal = init.signal;
+  const abortFromSource = () => controller.abort();
+  if (sourceSignal?.aborted) abortFromSource();
+  else sourceSignal?.addEventListener("abort", abortFromSource, { once: true });
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(path, { ...init, credentials: "same-origin", signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeout);
+    sourceSignal?.removeEventListener("abort", abortFromSource);
+  }
 }
 
 async function readResponseJson<T>(response: Response): Promise<T> {
@@ -447,30 +443,6 @@ async function readResponseJson<T>(response: Response): Promise<T> {
   } catch {
     throw new Error("O servidor enviou uma resposta inválida. Tente novamente.");
   }
-}
-
-function readScopedLocalState(userId: number): PersistedGuideState | null {
-  if (typeof window === "undefined") return null;
-  const state: PersistedGuideState = {};
-  let hasScopedState = false;
-  try {
-    for (const key of Object.keys(STORAGE) as (keyof typeof STORAGE)[]) {
-      const value = localStorage.getItem(scopedStorageKey(userId, STORAGE[key]));
-      if (value !== null) {
-        state[key] = safelyParseJson(value);
-        hasScopedState = true;
-      }
-    }
-    const drawerChecks = localStorage.getItem(scopedStorageKey(userId, "drawer-checks-v1"));
-    if (drawerChecks !== null) {
-      state.drawerChecks = safelyParseJson(drawerChecks);
-      hasScopedState = true;
-    }
-  } catch {
-    return null;
-  }
-  if (hasScopedState) return state;
-  return null;
 }
 
 function writeScopedLocalState(userId: number, key: string, value: unknown) {
@@ -487,9 +459,37 @@ function clearScopedLocalState(userId: number) {
   try {
     for (const key of Object.values(STORAGE)) localStorage.removeItem(scopedStorageKey(userId, key));
     localStorage.removeItem(scopedStorageKey(userId, "drawer-checks-v1"));
+    localStorage.removeItem(scopedStorageKey(userId, "pending-state-v1"));
   } catch {
     // The server remains authoritative even if browser storage is unavailable.
   }
+}
+
+type LocalPendingState = {
+  state: PersistedGuideState;
+  baseRevision: string | null;
+  updatedAt: string;
+};
+
+function readLocalPendingState(userId: number): LocalPendingState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const parsed = safelyParseJson(localStorage.getItem(scopedStorageKey(userId, "pending-state-v1")));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const source = parsed as Partial<LocalPendingState>;
+    if (!source.state || typeof source.state !== "object" || Array.isArray(source.state)) return null;
+    return {
+      state: source.state,
+      baseRevision: typeof source.baseRevision === "string" ? source.baseRevision : null,
+      updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalPendingState(userId: number, pending: LocalPendingState) {
+  writeScopedLocalState(userId, "pending-state-v1", pending);
 }
 
 const sections: { id: Section; label: string; icon: string; description: string }[] = [
@@ -1673,13 +1673,15 @@ function normalizeMetricNumber(value: unknown) {
 
 function normalizeMetrics(value: unknown): EmployeeMetrics {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value as Partial<Record<keyof EmployeeMetrics, unknown>> : {};
+  const quotes = Math.round(normalizeMetricNumber(source.quotes));
+  const officialQuotes = Math.min(Math.round(normalizeMetricNumber(source.officialQuotes)), quotes);
   return {
     leads: Math.round(normalizeMetricNumber(source.leads)),
-    quotes: Math.round(normalizeMetricNumber(source.quotes)),
-    officialQuotes: Math.round(normalizeMetricNumber(source.officialQuotes)),
-    incompleteQuotes: Math.round(normalizeMetricNumber(source.incompleteQuotes)),
-    followups: Math.round(normalizeMetricNumber(source.followups)),
-    closed: Math.round(normalizeMetricNumber(source.closed)),
+    quotes,
+    officialQuotes,
+    incompleteQuotes: Math.min(Math.round(normalizeMetricNumber(source.incompleteQuotes)), Math.max(0, quotes - officialQuotes)),
+    followups: Math.min(Math.round(normalizeMetricNumber(source.followups)), quotes),
+    closed: Math.min(Math.round(normalizeMetricNumber(source.closed)), quotes),
     ticket: normalizeMetricNumber(source.ticket),
   };
 }
@@ -1955,8 +1957,12 @@ function reactiveCustomerTurn(scenario: TrainingScenario, signals: CoachSignals,
   }
 }
 
-function guidedCoach(scenario: TrainingScenario, sellerMessage: string, turn: number): TrainingFeedback {
+function guidedCoach(scenario: TrainingScenario, sellerMessage: string, turn: number, history: TrainingMessage[] = []): TrainingFeedback {
   const signals = detectCoachSignals(sellerMessage);
+  const progressionSignals = detectCoachSignals([
+    ...history.filter((message) => message.role === "seller").map((message) => message.text),
+    sellerMessage,
+  ].join(" "));
   const skillScores: TrainingSkillScores = {
     acolhimento: 4,
     diagnostico: 4,
@@ -2025,7 +2031,7 @@ function guidedCoach(scenario: TrainingScenario, sellerMessage: string, turn: nu
     // Only curated customer-role messages can reach the chat in guided mode.
     // Reactive branches still drive the coaching analysis, but never write the
     // customer's speech, which prevents an accidental seller-role response.
-    customerReply: guidedCustomerReply(scenario, signals),
+    customerReply: guidedCustomerReply(scenario, progressionSignals),
     coachNote: reactive.coachNote,
     customerMood: reactive.customerMood,
     customerNeed: reactive.customerNeed,
@@ -2088,12 +2094,12 @@ function blankAccountEditor(id: number | null = null): AccountEditorState {
 
 function formatAccountDate(value: string | null) {
   if (!value) return "Ainda não usado";
-  const date = new Date(value);
+  const date = new Date(value.split("|", 1)[0]);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(date);
 }
 
-function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
+function AccountCenter({ onLogout, externalError }: { onLogout: () => Promise<void>; externalError?: string }) {
   const [accounts, setAccounts] = useState<AccountRecord[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<AccountRecord | null>(null);
   const [selectedState, setSelectedState] = useState<PersistedGuideState | null>(null);
@@ -2103,10 +2109,13 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
   const [editor, setEditor] = useState<AccountEditorState | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState("");
   const [editorBusy, setEditorBusy] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const detailsRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
+  const detailsRequestIdRef = useRef(0);
 
   async function loadAccounts() {
     setLoading(true);
@@ -2125,34 +2134,57 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadAccounts(); }, 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      detailsRequestRef.current?.controller.abort();
+    };
   }, []);
 
   async function openAccount(account: AccountRecord) {
+    detailsRequestRef.current?.controller.abort();
+    const requestId = detailsRequestIdRef.current + 1;
+    detailsRequestIdRef.current = requestId;
+    const controller = new AbortController();
+    detailsRequestRef.current = { id: requestId, controller };
     setSelectedAccount(account);
     setSelectedState(null);
     setSelectedSummary(account.summary ?? emptyAccountSummary);
+    setDetailsError("");
     setDetailsLoading(true);
     try {
-      const response = await apiFetch(`/api/admin/users/${account.id}`, { cache: "no-store" });
+      const response = await apiFetch(`/api/admin/users/${account.id}`, { cache: "no-store", signal: controller.signal });
+      if (detailsRequestRef.current?.id !== requestId) return;
       const payload = await readResponseJson<{ user?: AccountRecord; state?: PersistedGuideState | null; summary?: AccountSummary; error?: string }>(response);
+      if (detailsRequestRef.current?.id !== requestId) return;
       if (!response.ok || !payload.user) throw new Error(payload.error || "Não foi possível abrir os dados da conta.");
       setSelectedAccount(payload.user);
       setSelectedState(payload.state && typeof payload.state === "object" ? payload.state : null);
       setSelectedSummary(payload.summary ?? payload.user.summary ?? emptyAccountSummary);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Não foi possível abrir os dados da conta.");
+      if (controller.signal.aborted || detailsRequestRef.current?.id !== requestId) return;
+      setDetailsError(loadError instanceof Error ? loadError.message : "Não foi possível abrir os dados da conta.");
     } finally {
-      setDetailsLoading(false);
+      if (detailsRequestRef.current?.id === requestId) {
+        detailsRequestRef.current = null;
+        setDetailsLoading(false);
+      }
     }
+  }
+
+  function closeAccountDetails() {
+    detailsRequestRef.current?.controller.abort();
+    detailsRequestRef.current = null;
+    setDetailsLoading(false);
+    setDetailsError("");
+    setSelectedAccount(null);
+    setSelectedState(null);
+    setSelectedSummary(emptyAccountSummary);
   }
 
   function startCreate() {
     setError("");
     setNotice("");
-    setSelectedAccount(null);
-    setSelectedState(null);
-    setSelectedSummary(emptyAccountSummary);
+    closeAccountDetails();
     setEditor(blankAccountEditor());
   }
 
@@ -2197,9 +2229,7 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
       if (!response.ok || !payload.user) throw new Error(payload.error || "Não foi possível salvar o funcionário.");
       const wasNew = editor.id === null;
       setEditor(null);
-      setSelectedAccount(null);
-      setSelectedState(null);
-      setSelectedSummary(emptyAccountSummary);
+      closeAccountDetails();
       await loadAccounts();
       setNotice(wasNew ? "Funcionário criado com sucesso." : "Perfil atualizado com sucesso.");
     } catch (saveError) {
@@ -2219,9 +2249,7 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
       const payload = await readResponseJson<{ error?: string }>(response);
       if (!response.ok) throw new Error(payload.error || "Não foi possível apagar o funcionário.");
       if (selectedAccount?.id === account.id) {
-        setSelectedAccount(null);
-        setSelectedState(null);
-        setSelectedSummary(emptyAccountSummary);
+        closeAccountDetails();
       }
       if (editor?.id === account.id) setEditor(null);
       await loadAccounts();
@@ -2277,7 +2305,7 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
           <p>Crie, edite ou apague perfis e consulte os registros separados de cada funcionário.</p>
         </div>
 
-        {error && <div className="auth-error" role="alert">{error}</div>}
+        {(error || externalError) && <div className="auth-error" role="alert">{error || externalError}</div>}
         {notice && <div className="account-notice" role="status">✓ {notice}</div>}
 
         <section className="account-overview" aria-label="Resumo da equipe">
@@ -2355,10 +2383,12 @@ function AccountCenter({ onLogout }: { onLogout: () => Promise<void> }) {
                 <h2>{selectedAccount.displayName}</h2>
                 <p>{selectedAccount.username} · {selectedAccount.branch}</p>
               </div>
-              <button className="text-button" type="button" onClick={() => { setSelectedAccount(null); setSelectedState(null); setSelectedSummary(emptyAccountSummary); }}>Fechar <span>×</span></button>
+              <button className="text-button" type="button" onClick={closeAccountDetails}>Fechar <span>×</span></button>
             </div>
             {detailsLoading ? (
               <div className="account-empty">Abrindo registros…</div>
+            ) : detailsError ? (
+              <div className="auth-error" role="alert">{detailsError}</div>
             ) : (
               <>
                 <div className="account-performance-grid">
@@ -2448,6 +2478,7 @@ export default function Home() {
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [voiceCapturePending, setVoiceCapturePending] = useState(false);
   const [voiceSeconds, setVoiceSeconds] = useState(0);
   const [voiceTranscript, setVoiceTranscript] = useState("");
   const [voiceInterim, setVoiceInterim] = useState("");
@@ -2459,14 +2490,17 @@ export default function Home() {
   const [factoryItems, setFactoryItems] = useState<FactoryRequestItem[]>(defaultFactoryItems);
   const [factoryWizardStep, setFactoryWizardStep] = useState(0);
   const [factoryWizardDraft, setFactoryWizardDraft] = useState<Record<FactoryWizardField, string>>(blankFactoryWizard);
+  const [editingFactoryItemId, setEditingFactoryItemId] = useState<string | null>(null);
   const [newClient, setNewClient] = useState("");
   const [newNext, setNewNext] = useState("");
   const [newStatus, setNewStatus] = useState("Aguardando retorno");
   const [newPriority, setNewPriority] = useState<Priority>("Média");
   const [filterStatus, setFilterStatus] = useState("Todos");
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState<{ message: string; kind: ToastKind } | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
+  const [dataLoadError, setDataLoadError] = useState("");
+  const [dataLoadAttempt, setDataLoadAttempt] = useState(0);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [today, setToday] = useState("30 JUL 2026");
@@ -2476,55 +2510,86 @@ export default function Home() {
   const voiceChunksRef = useRef<Blob[]>([]);
   const voiceFinalPartsRef = useRef<string[]>([]);
   const voiceUrlsRef = useRef<string[]>([]);
-  const pendingStateRef = useRef<{ userId: number; state: PersistedGuideState } | null>(null);
+  const pendingStateRef = useRef<{ userId: number; state: PersistedGuideState; baseRevision: string | null } | null>(null);
   const saveTimerRef = useRef<number | null>(null);
-  const saveInFlightRef = useRef<Promise<void> | null>(null);
+  const flushLoopRef = useRef<Promise<boolean> | null>(null);
+  const revisionRef = useRef<string | null>(null);
+  const skipNextAutosaveRef = useRef(false);
+  const toastTimerRef = useRef<number | null>(null);
+  const trainingChatEndRef = useRef<HTMLDivElement | null>(null);
+  const trainingRequestRef = useRef<{ id: number; controller: AbortController } | null>(null);
+  const trainingRequestIdRef = useRef(0);
+  const voiceCaptureAttemptRef = useRef(0);
+  const profileDialogRef = useRef<HTMLElement | null>(null);
+  const profileTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const profileBusyRef = useRef(false);
+  const catalogDialogRef = useRef<HTMLElement | null>(null);
+  const catalogTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const factoryIdRef = useRef(0);
   const authUserId = authUser?.id ?? null;
 
-  const flushPendingState = useCallback(async () => {
-    const flush = async (): Promise<void> => {
+  const flushPendingState = useCallback(async (): Promise<boolean> => {
+    if (flushLoopRef.current) return await flushLoopRef.current;
+    const loop = (async (): Promise<boolean> => {
       if (saveTimerRef.current !== null) {
         window.clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
       }
 
-      const pending = pendingStateRef.current;
-      if (!pending) {
-        if (saveInFlightRef.current) await saveInFlightRef.current.catch(() => undefined);
-        return;
+      while (pendingStateRef.current) {
+        const pending = pendingStateRef.current;
+        pendingStateRef.current = null;
+        // Never let a delayed save from one employee be sent while another
+        // employee is the active session.
+        if (!authUserId || authUserId !== pending.userId) return false;
+        setSaveStatus("saving");
+        try {
+          const response = await apiFetch("/api/data", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ state: pending.state, baseRevision: pending.baseRevision }),
+          });
+          const payload = await readResponseJson<{ revision?: unknown; error?: string }>(response);
+          if (!response.ok) {
+            const error = new Error(payload.error || "Não foi possível salvar os dados agora.") as Error & { status?: number };
+            error.status = response.status;
+            throw error;
+          }
+          const revision = typeof payload.revision === "string" ? payload.revision : null;
+          revisionRef.current = revision;
+          clearScopedLocalState(pending.userId);
+          const queuedAfterSave = pendingStateRef.current as unknown as { userId: number; state: PersistedGuideState; baseRevision: string | null } | null;
+          if (queuedAfterSave?.userId === pending.userId) {
+            pendingStateRef.current = { ...queuedAfterSave, baseRevision: revision };
+            writeLocalPendingState(pending.userId, {
+              state: queuedAfterSave.state,
+              baseRevision: revision,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+          setLastSavedAt(new Date());
+          setSaveStatus("saved");
+        } catch (error) {
+          if (authUserId === pending.userId && !pendingStateRef.current) pendingStateRef.current = pending;
+          const status = (error as Error & { status?: number }).status;
+          if (status === 401) {
+            setAuthError("Sua sessão expirou. Entre novamente para sincronizar as alterações preservadas neste navegador.");
+            setHydrated(false);
+            setDataLoaded(false);
+            setAuthUser(null);
+          }
+          setSaveStatus(status === 409 ? "conflict" : typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "error");
+          return false;
+        }
       }
-
-      pendingStateRef.current = null;
-      // Never let a delayed save from one employee be sent while another
-      // employee is the active session.
-      if (!authUserId || authUserId !== pending.userId) return;
-      setSaveStatus("saving");
-      const previous = saveInFlightRef.current ?? Promise.resolve();
-      const current = previous.catch(() => undefined).then(async () => {
-        const response = await apiFetch("/api/data", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ state: pending.state }),
-        });
-        if (!response.ok) throw new Error("Não foi possível salvar os dados agora.");
-      });
-      saveInFlightRef.current = current;
-      let failed = false;
-      try {
-        await current;
-        setLastSavedAt(new Date());
-        setSaveStatus("saved");
-      } catch {
-        failed = true;
-        if (authUserId === pending.userId && !pendingStateRef.current) pendingStateRef.current = pending;
-        setSaveStatus(typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "error");
-      } finally {
-        if (saveInFlightRef.current === current) saveInFlightRef.current = null;
-      }
-
-      if (!failed && pendingStateRef.current) await flush();
-    };
-    await flush();
+      return true;
+    })();
+    flushLoopRef.current = loop;
+    try {
+      return await loop;
+    } finally {
+      if (flushLoopRef.current === loop) flushLoopRef.current = null;
+    }
   }, [authUserId]);
 
   useEffect(() => {
@@ -2555,27 +2620,41 @@ export default function Home() {
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       let state: PersistedGuideState | null = null;
-      let serverReadSucceeded = false;
       let usingLocalBackup = false;
       try {
         const response = await apiFetch("/api/data", { cache: "no-store" });
-        if (response.ok) {
-          const payload = await readResponseJson<{ state?: unknown }>(response);
-          serverReadSucceeded = true;
-          if (payload.state && typeof payload.state === "object" && !Array.isArray(payload.state)) {
-            state = payload.state as PersistedGuideState;
+        const payload = await readResponseJson<{ state?: unknown; revision?: unknown; error?: string }>(response);
+        if (!response.ok) {
+          if (response.status === 401) {
+            if (!cancelled) {
+              setAuthError("Sua sessão expirou. Entre novamente para continuar.");
+              setAuthUser(null);
+            }
+            return;
           }
+          throw new Error(payload.error || "Não foi possível abrir seus dados.");
         }
-      } catch {
-        // The browser-scoped copy below keeps the guide usable during a temporary connection issue.
+        const serverRevision = typeof payload.revision === "string" ? payload.revision : null;
+        revisionRef.current = serverRevision;
+        if (payload.state && typeof payload.state === "object" && !Array.isArray(payload.state)) {
+          state = payload.state as PersistedGuideState;
+        }
+        const localPending = readLocalPendingState(authUserId);
+        if (localPending) {
+          state = localPending.state;
+          revisionRef.current = localPending.baseRevision;
+          usingLocalBackup = true;
+        } else {
+          clearScopedLocalState(authUserId);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setDataLoadError(error instanceof Error && error.name === "AbortError"
+            ? "O servidor demorou para responder. Seus dados locais foram preservados."
+            : error instanceof Error ? error.message : "Não foi possível abrir seus dados.");
+        }
+        return;
       }
-      // A successful { state: null } is a real empty account. Do not hydrate it
-      // with a stale browser copy from an older session.
-      if (!serverReadSucceeded && !state) {
-        state = readScopedLocalState(authUserId);
-        usingLocalBackup = Boolean(state);
-      }
-      if (serverReadSucceeded && !state) clearScopedLocalState(authUserId);
       if (cancelled) return;
 
       const savedSales = Array.isArray(state?.sales) ? state.sales : [];
@@ -2643,8 +2722,9 @@ export default function Home() {
         quality: planner.proof?.quality !== false,
         guarantee: planner.proof?.guarantee !== false,
       });
-      setSaveStatus(usingLocalBackup ? (navigator.onLine ? "error" : "offline") : "saved");
+      setSaveStatus(usingLocalBackup ? (navigator.onLine ? "saving" : "offline") : "saved");
       setToday(formatToday());
+      skipNextAutosaveRef.current = !usingLocalBackup;
       setDataLoaded(true);
       setHydrated(true);
     }, 0);
@@ -2652,7 +2732,7 @@ export default function Home() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [authUserId]);
+  }, [authUserId, dataLoadAttempt]);
 
   useEffect(() => {
     const browserWindow = window as typeof window & {
@@ -2660,7 +2740,7 @@ export default function Home() {
       webkitSpeechRecognition?: SpeechRecognitionConstructor;
     };
     const hasSpeechRecognition = Boolean(browserWindow.SpeechRecognition || browserWindow.webkitSpeechRecognition);
-    const hasVoiceRecorder = Boolean(navigator.mediaDevices?.getUserMedia && typeof MediaRecorder !== "undefined");
+    const hasVoiceRecorder = Boolean(navigator.mediaDevices && typeof MediaRecorder !== "undefined");
     const capabilityTimer = window.setTimeout(() => {
       setSpeechSupported(hasSpeechRecognition);
       setVoiceSupported(hasVoiceRecorder);
@@ -2668,19 +2748,50 @@ export default function Home() {
 
     return () => {
       window.clearTimeout(capabilityTimer);
+      voiceCaptureAttemptRef.current += 1;
+      trainingRequestRef.current?.controller.abort();
       speechRecognitionRef.current?.abort();
-      mediaRecorderRef.current?.stop();
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") recorder.stop();
+      mediaRecorderRef.current = null;
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
       window.speechSynthesis?.cancel();
       voiceUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     };
   }, []);
 
   useEffect(() => {
+    if (authUserId) return;
+    voiceCaptureAttemptRef.current += 1;
+    trainingRequestRef.current?.controller.abort();
+    trainingRequestRef.current = null;
+    speechRecognitionRef.current?.abort();
+    speechRecognitionRef.current = null;
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+    mediaRecorderRef.current = null;
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+    const stateTimer = window.setTimeout(() => {
+      setVoiceCapturePending(false);
+      setTrainingBusy(false);
+      setIsRecording(false);
+    }, 0);
+    return () => window.clearTimeout(stateTimer);
+  }, [authUserId]);
+
+  useEffect(() => {
     if (!isRecording) return;
     const timer = window.setInterval(() => setVoiceSeconds((current) => current + 1), 1000);
     return () => window.clearInterval(timer);
   }, [isRecording]);
+
+  useEffect(() => {
+    if (!trainingStarted) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    trainingChatEndRef.current?.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
+  }, [trainingBusy, trainingMessages, trainingStarted]);
 
   useEffect(() => {
     if (!authUser || !hydrated || !dataLoaded) return;
@@ -2706,6 +2817,11 @@ export default function Home() {
       },
     };
 
+    if (skipNextAutosaveRef.current) {
+      skipNextAutosaveRef.current = false;
+      return;
+    }
+
     const localEntries: [keyof typeof STORAGE, unknown][] = [
       ["sales", state.sales],
       ["timing", state.timing],
@@ -2718,7 +2834,11 @@ export default function Home() {
     ];
     for (const [key, value] of localEntries) writeScopedLocalState(authUser.id, STORAGE[key], value);
     writeScopedLocalState(authUser.id, "drawer-checks-v1", drawerChecks);
-    pendingStateRef.current = { userId: authUser.id, state };
+    const baseRevision = pendingStateRef.current?.userId === authUser.id
+      ? pendingStateRef.current.baseRevision
+      : revisionRef.current;
+    pendingStateRef.current = { userId: authUser.id, state, baseRevision };
+    writeLocalPendingState(authUser.id, { state, baseRevision, updatedAt: new Date().toISOString() });
 
     const timer = window.setTimeout(() => {
       if (saveTimerRef.current === timer) saveTimerRef.current = null;
@@ -2732,35 +2852,83 @@ export default function Home() {
   }, [authUser, dailyDone, dataLoaded, doneSales, doneTiming, drawerChecks, factoryItems, flushPendingState, followUps, hydrated, messageChannel, messageEnvironment, messageLine, messageName, messageObjective, messageProof, messageQuestion, messageTone, metrics, trainingStats]);
 
   useEffect(() => {
+    if (!authUserId) return;
+    const flushOnPageHide = () => {
+      const pending = pendingStateRef.current;
+      if (!pending || pending.userId !== authUserId) return;
+      const body = JSON.stringify({ state: pending.state, baseRevision: pending.baseRevision });
+      // Browser keepalive requests have a small payload ceiling. Larger states
+      // remain safely queued in localStorage and retry when the guide reopens.
+      if (body.length > 60_000) return;
+      void fetch("/api/data", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body,
+        keepalive: true,
+      });
+    };
+    window.addEventListener("pagehide", flushOnPageHide);
+    return () => window.removeEventListener("pagehide", flushOnPageHide);
+  }, [authUserId]);
+
+  useEffect(() => {
     if (!selectedCatalog) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
+    const dialog = catalogDialogRef.current;
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1']):not([disabled])") ?? []);
+    const handleDialogKeys = (event: KeyboardEvent) => {
       if (event.key === "Escape") setSelectedCatalog(null);
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     };
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("keydown", handleDialogKeys);
+    window.requestAnimationFrame(() => focusable()[0]?.focus());
     return () => {
       document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("keydown", handleDialogKeys);
+      catalogTriggerRef.current?.focus();
     };
   }, [selectedCatalog]);
 
   useEffect(() => {
+    profileBusyRef.current = profileBusy;
+  }, [profileBusy]);
+
+  useEffect(() => {
     if (!profileOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !profileBusy) {
+    const dialog = profileDialogRef.current;
+    const trigger = profileTriggerRef.current;
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1']):not([disabled])") ?? []);
+    const handleDialogKeys = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !profileBusyRef.current) {
         setProfileOpen(false);
         setProfileError("");
       }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     };
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("keydown", handleDialogKeys);
+    window.requestAnimationFrame(() => focusable()[0]?.focus());
     return () => {
       document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("keydown", handleDialogKeys);
+      trigger?.focus();
     };
-  }, [profileBusy, profileOpen]);
+  }, [profileOpen]);
 
   const currentBrand = brandData[brand];
   const currentTrainingScenario = trainingScenarios[activeTrainingScenario];
@@ -2826,6 +2994,8 @@ export default function Home() {
   const masteredScenarios = Object.values(trainingStats.scenarioStats).filter((scenario) => scenario.attempts >= 2 && scenario.best >= 8).length;
   const saveStatusLabel = saveStatus === "saving"
     ? "Salvando…"
+    : saveStatus === "conflict"
+      ? "Outra aba alterou estes dados"
     : saveStatus === "offline"
       ? "Offline · envio pendente"
       : saveStatus === "error"
@@ -2853,9 +3023,13 @@ export default function Home() {
     return pending;
   }, [messageEnvironment, messageQuestion]);
 
-  function showToast(message: string) {
-    setToast(message);
-    window.setTimeout(() => setToast(""), 2600);
+  function showToast(message: string, kind: ToastKind = "success") {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    setToast({ message, kind });
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 3200);
   }
 
   function openProfileEditor() {
@@ -2888,7 +3062,7 @@ export default function Home() {
 
     setProfileBusy(true);
     try {
-      await flushPendingState();
+      if (!(await flushPendingState())) throw new Error("Sincronize as alterações pendentes antes de atualizar o perfil.");
       const response = await apiFetch("/api/auth/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -2921,6 +3095,8 @@ export default function Home() {
   }
 
   function resetEmployeeWorkspace() {
+    cancelTrainingRequest();
+    cancelPendingVoiceCapture();
     if (isRecording) stopVoiceCapture();
     window.speechSynthesis?.cancel();
     if (voicePreviewUrl) discardVoiceDraft();
@@ -2958,6 +3134,7 @@ export default function Home() {
     setFilterStatus("Todos");
     setFactoryWizardStep(0);
     setFactoryWizardDraft(blankFactoryWizard());
+    setEditingFactoryItemId(null);
     setSelectedCatalog(null);
     setCatalogSearch("");
     setCatalogFamily("Todas");
@@ -2967,6 +3144,7 @@ export default function Home() {
     setActiveTimingStep(0);
     setSaveStatus("idle");
     setLastSavedAt(null);
+    revisionRef.current = null;
   }
 
   async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
@@ -2995,6 +3173,8 @@ export default function Home() {
       saveTimerRef.current = null;
       setHydrated(false);
       setDataLoaded(false);
+      setDataLoadError("");
+      revisionRef.current = null;
       setIsAdmin(data.admin === true);
       setAuthUser(data.user ?? null);
       setAuthForm({ displayName: "", username: "", branch: "Araraquara", password: "", confirmPassword: "" });
@@ -3008,10 +3188,14 @@ export default function Home() {
 
   async function handleLogout() {
     setAuthBusy(true);
+    setAuthError("");
     try {
-      await flushPendingState();
-      await apiFetch("/api/auth/logout", { method: "POST" });
-    } finally {
+      if (!(await flushPendingState())) {
+        throw new Error("Não foi possível sincronizar suas alterações. A saída foi cancelada para preservar seus dados.");
+      }
+      const response = await apiFetch("/api/auth/logout", { method: "POST" });
+      const data = await readResponseJson<{ ok?: boolean; error?: string }>(response);
+      if (!response.ok || data.ok !== true) throw new Error(data.error || "Não foi possível encerrar a sessão.");
       pendingStateRef.current = null;
       if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -3026,6 +3210,11 @@ export default function Home() {
       setAuthMode("login");
       setAuthError("");
       setAuthForm({ displayName: "", username: "", branch: "Araraquara", password: "", confirmPassword: "" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível sair da conta.";
+      setAuthError(message);
+      showToast(message, "error");
+    } finally {
       setAuthBusy(false);
     }
   }
@@ -3047,7 +3236,7 @@ export default function Home() {
       await navigator.clipboard.writeText(message);
       showToast(`${label} copiada para a área de transferência`);
     } catch {
-      showToast("Selecione e copie a mensagem manualmente");
+      showToast("Selecione e copie a mensagem manualmente", "info");
     }
   }
 
@@ -3066,7 +3255,7 @@ export default function Home() {
   async function startVoiceCapture() {
     if (!voiceSupported) {
       setTrainingInputMode("text");
-      showToast("Seu navegador não liberou gravação; use o modo texto ou outro navegador");
+      showToast("Seu navegador não liberou gravação; use o modo texto ou outro navegador", "error");
       return;
     }
 
@@ -3074,9 +3263,16 @@ export default function Home() {
     voiceFinalPartsRef.current = [];
     setVoiceSeconds(0);
     setVoiceStatus(speechSupported ? "Fale naturalmente; a transcrição aparece abaixo" : "Áudio sendo gravado; escreva a transcrição ao terminar");
+    const attempt = voiceCaptureAttemptRef.current + 1;
+    voiceCaptureAttemptRef.current = attempt;
+    setVoiceCapturePending(true);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (voiceCaptureAttemptRef.current !== attempt) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       mediaStreamRef.current = stream;
       const recorder = new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
@@ -3095,6 +3291,7 @@ export default function Home() {
         mediaStreamRef.current = null;
       };
       recorder.start();
+      setVoiceCapturePending(false);
       setIsRecording(true);
 
       const browserWindow = window as typeof window & {
@@ -3128,7 +3325,7 @@ export default function Home() {
         recognition.onerror = (event) => {
           if (event.error === "not-allowed" || event.error === "service-not-allowed") {
             setVoiceStatus("Permissão de voz não liberada; o áudio continua gravado e você pode digitar a transcrição.");
-            showToast("Permita o microfone para transcrever sua fala");
+            showToast("Permita o microfone para transcrever sua fala", "error");
           } else if (event.error !== "aborted") {
             setVoiceStatus("A gravação continua; revise ou complete a transcrição abaixo.");
           }
@@ -3144,11 +3341,19 @@ export default function Home() {
         }
       }
     } catch {
+      if (voiceCaptureAttemptRef.current !== attempt) return;
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
       setVoiceStatus("Não foi possível acessar o microfone. Verifique a permissão do navegador.");
-      showToast("Microfone não disponível neste dispositivo");
+      showToast("Microfone não disponível neste dispositivo", "error");
+    } finally {
+      if (voiceCaptureAttemptRef.current === attempt) setVoiceCapturePending(false);
     }
+  }
+
+  function cancelPendingVoiceCapture() {
+    voiceCaptureAttemptRef.current += 1;
+    setVoiceCapturePending(false);
   }
 
   function stopVoiceCapture() {
@@ -3168,7 +3373,7 @@ export default function Home() {
 
   function speakText(text: string, messageId: string) {
     if (!("speechSynthesis" in window)) {
-      showToast("Seu navegador não oferece leitura de áudio");
+      showToast("Seu navegador não oferece leitura de áudio", "info");
       return;
     }
     if (speakingMessageId === messageId) {
@@ -3189,6 +3394,9 @@ export default function Home() {
 
   function startTraining(index = activeTrainingScenario) {
     const scenario = trainingScenarios[index];
+    cancelTrainingRequest();
+    cancelPendingVoiceCapture();
+    if (isRecording) stopVoiceCapture();
     if (voicePreviewUrl) discardVoiceDraft();
     setActiveTrainingScenario(index);
     setTrainingMessages([{ role: "customer", text: scenario.opening }]);
@@ -3199,6 +3407,12 @@ export default function Home() {
     setVoiceInterim("");
     setVoiceStatus("Pronto para treinar por áudio");
     setTrainingStarted(true);
+  }
+
+  function selectTrainingInputMode(mode: "voice" | "text") {
+    cancelPendingVoiceCapture();
+    if (isRecording) stopVoiceCapture();
+    setTrainingInputMode(mode);
   }
 
   function selectTrainingLevel(level: TrainingFilter) {
@@ -3244,6 +3458,8 @@ export default function Home() {
   }
 
   function resetTraining() {
+    cancelTrainingRequest();
+    cancelPendingVoiceCapture();
     if (isRecording) stopVoiceCapture();
     window.speechSynthesis?.cancel();
     setSpeakingMessageId(null);
@@ -3255,6 +3471,13 @@ export default function Home() {
     setVoiceInterim("");
     setVoiceStatus("Pronto para treinar por áudio");
     setTrainingStarted(false);
+  }
+
+  function cancelTrainingRequest() {
+    const activeRequest = trainingRequestRef.current;
+    if (activeRequest) activeRequest.controller.abort();
+    trainingRequestRef.current = null;
+    setTrainingBusy(false);
   }
 
   async function sendTrainingMessage(event: FormEvent<HTMLFormElement>) {
@@ -3270,6 +3493,10 @@ export default function Home() {
     setVoiceInterim("");
     setVoicePreviewUrl("");
     setVoiceStatus("Resposta enviada — você pode falar novamente na próxima rodada");
+    const requestId = trainingRequestIdRef.current + 1;
+    trainingRequestIdRef.current = requestId;
+    const requestController = new AbortController();
+    trainingRequestRef.current = { id: requestId, controller: requestController };
     setTrainingBusy(true);
 
     try {
@@ -3282,9 +3509,12 @@ export default function Home() {
           sellerMessage,
           turn,
         }),
+        signal: requestController.signal,
       });
+      if (trainingRequestRef.current?.id !== requestId) return;
       if (!response.ok) throw new Error("AI não configurada");
       const data = await readResponseJson<Partial<TrainingFeedback>>(response);
+      if (trainingRequestRef.current?.id !== requestId) return;
       if (!data.customerReply || typeof data.score !== "number") throw new Error("Resposta inválida");
       const feedback: TrainingFeedback = {
         mode: data.mode === "contextual" ? "contextual" : "guiado",
@@ -3306,20 +3536,24 @@ export default function Home() {
       setTrainingMessages((current) => [...current, { role: "customer", text: feedback.customerReply }]);
       recordTrainingRound(feedback.score, scenario.id, feedback.skillScores);
     } catch {
-      const feedback = guidedCoach(scenario, sellerMessage, turn);
+      if (requestController.signal.aborted || trainingRequestRef.current?.id !== requestId) return;
+      const feedback = guidedCoach(scenario, sellerMessage, turn, trainingMessages);
       setTrainingFeedback(feedback);
       setTrainingMessages((current) => [...current, { role: "customer", text: feedback.customerReply }]);
       recordTrainingRound(feedback.score, scenario.id, feedback.skillScores);
-      showToast("Treino guiado ativado — a conversa continua funcionando");
+      showToast("Treino guiado ativado — a conversa continua funcionando", "info");
     } finally {
-      setTrainingBusy(false);
+      if (trainingRequestRef.current?.id === requestId) {
+        trainingRequestRef.current = null;
+        setTrainingBusy(false);
+      }
     }
   }
 
   function addFollowUp(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!newClient.trim() || !newNext.trim()) {
-      showToast("Preencha cliente e próxima ação");
+      showToast("Preencha cliente e próxima ação", "error");
       return;
     }
     setFollowUps((current) => [{ id: `local-${Date.now()}`, client: newClient.trim(), status: newStatus, next: newNext.trim(), priority: newPriority, done: false }, ...current]);
@@ -3335,13 +3569,37 @@ export default function Home() {
   }
 
   function navigate(next: Section) {
+    if (next !== "training") {
+      cancelTrainingRequest();
+      cancelPendingVoiceCapture();
+    }
+    if (isRecording) stopVoiceCapture();
     setSection(next);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function reloadServerState() {
+    if (!authUser || !window.confirm("Recarregar a versão salva no servidor? A cópia local pendente será descartada.")) return;
+    pendingStateRef.current = null;
+    clearScopedLocalState(authUser.id);
+    setSaveStatus("idle");
+    setDataLoadError("");
+    setDataLoaded(false);
+    setHydrated(false);
+    setDataLoadAttempt((current) => current + 1);
+  }
+
   function updateMetric(key: keyof typeof metrics, value: string) {
     const numeric = key === "ticket" ? Number(value.replace(",", ".")) : Number.parseInt(value, 10);
-    setMetrics((current) => ({ ...current, [key]: Number.isFinite(numeric) ? Math.max(0, numeric) : 0 }));
+    setMetrics((current) => {
+      const next = { ...current, [key]: Number.isFinite(numeric) ? Math.max(0, numeric) : 0 };
+      next.quotes = Math.round(next.quotes);
+      next.officialQuotes = Math.min(Math.round(next.officialQuotes), next.quotes);
+      next.incompleteQuotes = Math.min(Math.round(next.incompleteQuotes), Math.max(0, next.quotes - next.officialQuotes));
+      next.followups = Math.min(Math.round(next.followups), next.quotes);
+      next.closed = Math.min(Math.round(next.closed), next.quotes);
+      return next;
+    });
   }
 
   function updateFactoryWizard(key: FactoryWizardField, value: string) {
@@ -3367,7 +3625,7 @@ export default function Home() {
 
   function goToNextFactoryWizardStep() {
     if (!activeFactoryWizardStep.optional && !factoryWizardDraft[activeFactoryWizardStep.key].trim()) {
-      showToast(`Preencha ${activeFactoryWizardStep.label} ou marque como A confirmar`);
+      showToast(`Preencha ${activeFactoryWizardStep.label} ou marque como A confirmar`, "error");
       return;
     }
     setFactoryWizardStep((current) => Math.min(current + 1, factoryWizardSteps.length - 1));
@@ -3380,60 +3638,113 @@ export default function Home() {
   function resetFactoryWizard() {
     setFactoryWizardDraft(blankFactoryWizard());
     setFactoryWizardStep(0);
+    setEditingFactoryItemId(null);
   }
 
   function addFactoryWizardItem() {
     const missingStep = factoryWizardSteps.findIndex(({ key, optional }) => !optional && !factoryWizardDraft[key].trim());
     if (missingStep >= 0) {
       setFactoryWizardStep(missingStep);
-      showToast(`Conclua a etapa ${factoryWizardSteps[missingStep].label} ou marque como A confirmar`);
+      showToast(`Conclua a etapa ${factoryWizardSteps[missingStep].label} ou marque como A confirmar`, "error");
       return;
     }
     if (!isKnownDalcomadKitCombination(factoryWizardDraft)) {
       setFactoryWizardStep(factoryWizardSteps.findIndex(({ key }) => key === "line"));
-      showToast("Escolha uma combinação de linha, acabamento e cor das amostras Dalcomad");
+      showToast("Escolha uma combinação de linha, acabamento e cor das amostras Dalcomad", "error");
       return;
+    }
+    for (const key of ["priceWithoutLock", "priceWithLock"] as const) {
+      if (parseDalcomadKitPrice(factoryWizardDraft[key]) === null) {
+        setFactoryWizardStep(factoryWizardSteps.findIndex((step) => step.key === key));
+        showToast("Informe um valor válido, sem texto ou número negativo", "error");
+        return;
+      }
+    }
+    if (!editingFactoryItemId && factoryItems.length >= 240) {
+      showToast("A requisição atingiu o limite de 240 kits. Exporte ou remova itens antes de continuar.", "error");
+      return;
+    }
+    let generatedId = editingFactoryItemId;
+    if (!generatedId) {
+      const existingIds = new Set(factoryItems.map((item) => item.id));
+      do {
+        factoryIdRef.current += 1;
+        generatedId = `wizard-${authUserId ?? "local"}-${factoryIdRef.current}`;
+      } while (existingIds.has(generatedId));
     }
 
     const generatedItem: FactoryRequestItem = {
-      id: `wizard-${Date.now()}`,
+      id: generatedId,
       manufacturer: "DALCOMAD",
       description: "KIT PORTA",
       opening: "ABRIR",
       ...factoryWizardDraft,
     };
-    setFactoryItems((current) => {
-      return [...current, generatedItem];
-    });
+    setFactoryItems((current) => editingFactoryItemId
+      ? current.map((item) => item.id === editingFactoryItemId ? generatedItem : item)
+      : [...current, generatedItem]);
     resetFactoryWizard();
-    showToast("Kit enviado para a requisição Dalcomad");
+    showToast(editingFactoryItemId ? "Kit atualizado na requisição" : "Kit enviado para a requisição Dalcomad");
+  }
+
+  function editFactoryItem(item: FactoryRequestItem) {
+    setEditingFactoryItemId(item.id);
+    setFactoryWizardDraft({
+      leafMeasure: item.leafMeasure,
+      requadro: item.requadro,
+      color: item.color,
+      line: item.line,
+      finish: item.finish,
+      filling: item.filling,
+      priceWithoutLock: item.priceWithoutLock,
+      priceWithLock: item.priceWithLock,
+    });
+    setFactoryWizardStep(0);
+    document.querySelector(".factory-locator")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function removeFactoryItem(item: FactoryRequestItem) {
+    if (!window.confirm(`Remover o kit ${item.leafMeasure || item.id} da requisição?`)) return;
+    setFactoryItems((current) => current.filter((candidate) => candidate.id !== item.id));
+    if (editingFactoryItemId === item.id) resetFactoryWizard();
+    showToast("Kit removido da requisição", "info");
   }
 
   function clearFactoryItems() {
     if (!window.confirm("Limpar os itens da requisição? As linhas já enviadas serão removidas da sua conta.")) return;
     setFactoryItems([]);
+    resetFactoryWizard();
     showToast("Itens enviados removidos");
   }
 
   function exportFactoryToExcel() {
     if (filledFactoryItems.length === 0) {
-      showToast("Preencha pelo menos uma linha antes de exportar");
+      showToast("Envie pelo menos um kit antes de exportar", "error");
       return;
     }
 
     try {
+      const invalidPriceItem = filledFactoryItems.find((item) => (
+        parseDalcomadKitPrice(item.priceWithoutLock) === null
+        || parseDalcomadKitPrice(item.priceWithLock) === null
+      ));
+      if (invalidPriceItem) {
+        editFactoryItem(invalidPriceItem);
+        showToast("Revise os valores deste kit antes de exportar", "error");
+        return;
+      }
       const rows = filledFactoryItems.map((item) => [
-        item.manufacturer || "DALCOMAD",
-        item.description,
-        item.opening,
+        "DALCOMAD",
+        "KIT PORTA",
+        "ABRIR",
         item.leafMeasure,
         item.requadro,
         item.color,
         item.line,
         item.finish,
         item.filling,
-        parseFactoryPrice(item.priceWithoutLock),
-        parseFactoryPrice(item.priceWithLock),
+        parseDalcomadKitPrice(item.priceWithoutLock) ?? "",
+        parseDalcomadKitPrice(item.priceWithLock) ?? "",
       ]);
       const listRows: (string | null)[][] = [["Linha", "Acabamento", "Cor da amostra"]];
       dalcomadKitCombinations.forEach((item) => listRows.push([item.line, item.finish, item.color]));
@@ -3467,17 +3778,18 @@ export default function Home() {
       showToast(`${rows.length} ${rows.length === 1 ? "item exportado" : "itens exportados"} para Excel`);
     } catch (error) {
       console.error("Falha ao exportar requisição Dalcomad", error);
-      showToast("Não foi possível gerar o arquivo Excel; tente novamente");
+      showToast("Não foi possível gerar o arquivo Excel; tente novamente", "error");
     }
   }
 
   if (authLoading || (authUser && !dataLoaded)) {
     return (
       <main className="auth-shell">
-        <section className="auth-card auth-loading" aria-live="polite">
+        <section className="auth-card auth-loading" aria-live="polite" aria-busy={!dataLoadError}>
           <div className="brand-mark auth-mark">MP</div>
-          <strong>{authUser ? "Abrindo seu espaço…" : "Carregando acesso…"}</strong>
-          <span>Preparando o Guia Comercial Mult Portas</span>
+          <strong>{dataLoadError || (authUser ? "Abrindo seu espaço…" : "Carregando acesso…")}</strong>
+          <span>{dataLoadError ? "Nenhum dado será sobrescrito enquanto a leitura não for concluída." : "Preparando o Guia Comercial Mult Portas"}</span>
+          {dataLoadError && <button className="button primary" type="button" onClick={() => setDataLoadAttempt((current) => current + 1)}>Tentar novamente</button>}
         </section>
       </main>
     );
@@ -3487,7 +3799,8 @@ export default function Home() {
     return <AuthScreen mode={authMode} setMode={(mode) => { setAuthMode(mode); setAuthError(""); }} form={authForm} setForm={setAuthForm} error={authError} busy={authBusy} onSubmit={handleAuthSubmit} />;
   }
 
-  if (isAdmin) return <AccountCenter onLogout={handleLogout} />;
+  if (isAdmin) return <AccountCenter onLogout={handleLogout} externalError={authError} />;
+  if (!authUser) return null;
 
   return (
     <main className="app-shell">
@@ -3526,11 +3839,12 @@ export default function Home() {
           <div className="breadcrumbs"><span>Mult Portas</span><b>/</b><strong>{sections.find((item) => item.id === section)?.label}</strong></div>
           <div className="topbar-actions">
             <span className={`save-status ${saveStatus}`} role="status" aria-live="polite"><i />{saveStatusLabel}</span>
+            {saveStatus === "conflict" && <button className="sync-reload-button" type="button" onClick={reloadServerState}>Recarregar dados salvos</button>}
             <span className="date-chip">{today}</span>
             <div className="user-area">
               <span className="user-chip">{authUser.displayName.slice(0, 1).toUpperCase()}</span>
               <div className="user-details"><strong>{authUser.displayName}</strong><small>{authUser.branch} · {authUser.username}</small></div>
-              <button className="profile-button" type="button" onClick={openProfileEditor}>Meu perfil</button>
+              <button className="profile-button" type="button" ref={profileTriggerRef} onClick={openProfileEditor}>Meu perfil</button>
               <button className="logout-button" type="button" onClick={handleLogout}>Sair da conta</button>
             </div>
           </div>
@@ -3538,7 +3852,7 @@ export default function Home() {
 
         {profileOpen && (
           <div className="profile-backdrop" role="presentation" onMouseDown={closeProfileEditor}>
-            <section className="profile-dialog" role="dialog" aria-modal="true" aria-labelledby="profile-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
+            <section className="profile-dialog" ref={profileDialogRef} role="dialog" aria-modal="true" aria-labelledby="profile-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
               <div className="profile-dialog-head">
                 <div><span className="section-kicker">CONTA DO FUNCIONÁRIO</span><h2 id="profile-dialog-title">Editar meu perfil</h2><p>Atualize seu nome, filial ou senha sem perder os dados salvos.</p></div>
                 <button type="button" className="profile-close" onClick={closeProfileEditor} aria-label="Fechar edição do perfil">×</button>
@@ -3703,8 +4017,8 @@ export default function Home() {
             <div className="training-layout">
               <aside className="training-scenarios panel">
                 <div className="panel-heading"><div><span className="section-kicker">CENÁRIOS</span><h2>Escolha sua situação</h2></div><span className="training-count">{visibleTrainingScenarios.length}/{trainingScenarios.length}</span></div>
-                <div className="training-filters" role="tablist" aria-label="Filtrar cenários por nível">{(["Todos", "Básico", "Intermediário", "Avançado"] as TrainingFilter[]).map((level) => <button key={level} className={trainingLevelFilter === level ? "active" : ""} onClick={() => selectTrainingLevel(level)} role="tab" aria-selected={trainingLevelFilter === level}>{level}</button>)}</div>
-                <div className="scenario-list">{visibleTrainingScenarios.map((scenario) => { const index = trainingScenarios.findIndex((item) => item.id === scenario.id); return <button key={scenario.id} className={`scenario-card ${activeTrainingScenario === index ? "active" : ""}`} onClick={() => { setActiveTrainingScenario(index); if (trainingStarted) startTraining(index); }} aria-pressed={activeTrainingScenario === index}><span className={`scenario-level ${priorityClass(scenario.level === "Básico" ? "Baixa" : scenario.level === "Intermediário" ? "Média" : "Alta")}`}>{scenario.level}</span><span className="scenario-copy"><strong>{scenario.title}</strong><small>{scenario.tag} · {scenario.objective}</small></span><span className="scenario-arrow">→</span></button>; })}</div>
+                <div className="training-filters" role="tablist" aria-label="Filtrar cenários por nível">{(["Todos", "Básico", "Intermediário", "Avançado"] as TrainingFilter[]).map((level) => <button key={level} className={trainingLevelFilter === level ? "active" : ""} onClick={() => selectTrainingLevel(level)} role="tab" aria-selected={trainingLevelFilter === level} disabled={trainingBusy}>{level}</button>)}</div>
+                <div className="scenario-list">{visibleTrainingScenarios.map((scenario) => { const index = trainingScenarios.findIndex((item) => item.id === scenario.id); return <button key={scenario.id} className={`scenario-card ${activeTrainingScenario === index ? "active" : ""}`} onClick={() => { setActiveTrainingScenario(index); if (trainingStarted) startTraining(index); }} aria-pressed={activeTrainingScenario === index} disabled={trainingBusy}><span className={`scenario-level ${priorityClass(scenario.level === "Básico" ? "Baixa" : scenario.level === "Intermediário" ? "Média" : "Alta")}`}>{scenario.level}</span><span className="scenario-copy"><strong>{scenario.title}</strong><small>{scenario.tag} · {scenario.objective}</small></span><span className="scenario-arrow">→</span></button>; })}</div>
                 <div className="scenario-note"><span>✦</span><p>Comece pelo básico e avance quando conseguir conduzir a conversa sem correr para o preço.</p></div>
               </aside>
 
@@ -3714,7 +4028,18 @@ export default function Home() {
                 ) : (
                   <>
                     <div className="training-session-head"><div><span className="section-kicker">{currentTrainingScenario.tag} · {currentTrainingScenario.level.toUpperCase()}</span><h2>{currentTrainingScenario.title}</h2></div><div className="training-session-actions"><span className={`voice-ready ${voiceSupported ? "ready" : "limited"}`}><span />{voiceSupported ? "voz disponível" : "modo texto"}</span><button className="text-button" onClick={resetTraining}>Encerrar treino <span>×</span></button></div></div>
-                    <div className="training-chat" aria-live="polite"><div className="training-chat-scroll">{trainingMessages.map((message, index) => <div className={`training-bubble ${message.role}`} key={`${message.role}-${index}`}><div className="bubble-label"><span>{message.role === "customer" ? "CLIENTE SIMULADO" : "SUA RESPOSTA"}</span>{message.role === "customer" && <button className="speak-button" type="button" onClick={() => speakText(message.text, `customer-${index}`)}>{speakingMessageId === `customer-${index}` ? "Parar áudio" : "Ouvir cliente"} <span>{speakingMessageId === `customer-${index}` ? "■" : "▶"}</span></button>}</div><p>{message.text}</p>{message.audioUrl && <audio className="voice-audio" controls preload="metadata" src={message.audioUrl} aria-label="Ouvir sua resposta gravada" />}</div>)}{trainingBusy && <div className="training-thinking"><span className="thinking-dot" /><span className="thinking-dot" /><span className="thinking-dot" /> treinador analisando</div>}</div><div className="training-composer-shell"><div className="training-mode-switch" role="tablist" aria-label="Modo de resposta"><button type="button" className={trainingInputMode === "voice" ? "active" : ""} onClick={() => setTrainingInputMode("voice")} role="tab" aria-selected={trainingInputMode === "voice"}>◉ Falar</button><button type="button" className={trainingInputMode === "text" ? "active" : ""} onClick={() => setTrainingInputMode("text")} role="tab" aria-selected={trainingInputMode === "text"}>Aa Digitar</button></div>{trainingInputMode === "voice" && <div className="voice-control-panel"><button type="button" className={`voice-record-button ${isRecording ? "recording" : ""}`} onClick={isRecording ? stopVoiceCapture : startVoiceCapture} disabled={trainingBusy} aria-pressed={isRecording}><span className="voice-mic">{isRecording ? "■" : "●"}</span><span>{isRecording ? `Parar gravação · ${formatVoiceDuration(voiceSeconds)}` : "Gravar resposta"}</span></button><div className="voice-control-copy"><strong>{voiceStatus}</strong><small>{speechSupported ? "A fala é transcrita no navegador e pode ser editada antes do envio." : "Seu navegador não transcreve automaticamente; você ainda pode gravar e digitar a resposta."}</small></div>{voicePreviewUrl && !isRecording && <audio className="voice-preview" controls preload="metadata" src={voicePreviewUrl} aria-label="Prévia da sua resposta gravada" />} {(voicePreviewUrl || voiceTranscript) && !isRecording && <button type="button" className="voice-discard" onClick={discardVoiceDraft}>Refazer <span>↻</span></button>}</div>}<form className="training-composer" onSubmit={sendTrainingMessage}><textarea value={trainingInput} onChange={(event) => setTrainingInput(event.target.value)} placeholder={trainingInputMode === "voice" ? "Sua transcrição aparece aqui. Revise antes de enviar..." : "Digite como você responderia ao cliente..."} aria-label="Sua resposta para o cliente" disabled={trainingBusy || isRecording} rows={trainingInputMode === "voice" ? 2 : 1} />{voiceInterim && <span className="voice-interim">ouvindo: {voiceInterim}</span>}<button className="button dark" type="submit" disabled={trainingBusy || isRecording || !trainingInput.trim()}>{trainingBusy ? "Analisando" : "Enviar resposta"} <span>↗</span></button></form></div></div>
+                    <div className="training-chat" aria-live="polite">
+                      <div className="training-chat-scroll">
+                        {trainingMessages.map((message, index) => <div className={`training-bubble ${message.role}`} key={`${message.role}-${index}`}><div className="bubble-label"><span>{message.role === "customer" ? "CLIENTE SIMULADO" : "SUA RESPOSTA"}</span>{message.role === "customer" && <button className="speak-button" type="button" onClick={() => speakText(message.text, `customer-${index}`)}>{speakingMessageId === `customer-${index}` ? "Parar áudio" : "Ouvir cliente"} <span>{speakingMessageId === `customer-${index}` ? "■" : "▶"}</span></button>}</div><p>{message.text}</p>{message.audioUrl && <audio className="voice-audio" controls preload="metadata" src={message.audioUrl} aria-label="Ouvir sua resposta gravada" />}</div>)}
+                        {trainingBusy && <div className="training-thinking"><span className="thinking-dot" /><span className="thinking-dot" /><span className="thinking-dot" /> treinador analisando</div>}
+                        <div ref={trainingChatEndRef} aria-hidden="true" />
+                      </div>
+                      <div className="training-composer-shell">
+                        <div className="training-mode-switch" aria-label="Modo de resposta"><button type="button" className={trainingInputMode === "voice" ? "active" : ""} onClick={() => selectTrainingInputMode("voice")} aria-pressed={trainingInputMode === "voice"} disabled={trainingBusy || voiceCapturePending}>◉ Falar</button><button type="button" className={trainingInputMode === "text" ? "active" : ""} onClick={() => selectTrainingInputMode("text")} aria-pressed={trainingInputMode === "text"} disabled={trainingBusy || voiceCapturePending}>Aa Digitar</button></div>
+                        {trainingInputMode === "voice" && <div className="voice-control-panel"><button type="button" className={`voice-record-button ${isRecording ? "recording" : ""}`} onClick={isRecording ? stopVoiceCapture : startVoiceCapture} disabled={trainingBusy || voiceCapturePending} aria-pressed={isRecording}><span className="voice-mic">{isRecording ? "■" : "●"}</span><span>{voiceCapturePending ? "Aguardando microfone…" : isRecording ? `Parar gravação · ${formatVoiceDuration(voiceSeconds)}` : "Gravar resposta"}</span></button><div className="voice-control-copy"><strong>{voiceStatus}</strong><small>{speechSupported ? "A fala é transcrita no navegador e pode ser editada antes do envio." : "Seu navegador não transcreve automaticamente; você ainda pode gravar e digitar a resposta."}</small></div>{voicePreviewUrl && !isRecording && <audio className="voice-preview" controls preload="metadata" src={voicePreviewUrl} aria-label="Prévia da sua resposta gravada" />} {(voicePreviewUrl || voiceTranscript) && !isRecording && <button type="button" className="voice-discard" onClick={discardVoiceDraft}>Refazer <span>↻</span></button>}</div>}
+                        <form className="training-composer" onSubmit={sendTrainingMessage}><textarea value={trainingInput} onChange={(event) => setTrainingInput(event.target.value)} placeholder={trainingInputMode === "voice" ? "Sua transcrição aparece aqui. Revise antes de enviar..." : "Digite como você responderia ao cliente..."} aria-label="Sua resposta para o cliente" disabled={trainingBusy || isRecording || voiceCapturePending} rows={trainingInputMode === "voice" ? 2 : 1} />{voiceInterim && <span className="voice-interim">ouvindo: {voiceInterim}</span>}<button className="button dark" type="submit" disabled={trainingBusy || isRecording || voiceCapturePending || !trainingInput.trim()}>{trainingBusy ? "Analisando" : "Enviar resposta"} <span>↗</span></button></form>
+                      </div>
+                    </div>
                     <div className="training-session-foot"><span>Regra do treino: não invente medida, valor, estoque ou prazo.</span><span>{trainingTurns} resposta{trainingTurns === 1 ? "" : "s"} enviada{trainingTurns === 1 ? "" : "s"} · melhor neste cenário {trainingStats.scenarioStats[currentTrainingScenario.id]?.best ? `${trainingStats.scenarioStats[currentTrainingScenario.id].best}/10` : "—"}</span></div>
                   </>
                 )}
@@ -3815,31 +4140,47 @@ export default function Home() {
 
               <section className="factory-locator" aria-label="Montador passo a passo do Kit Porta Dalcomad">
                 <div className="factory-locator-header">
-                  <div><span className="section-kicker">MONTADOR PASSO A PASSO</span><h3>Monte o Kit Porta Dalcomad</h3><p>Escolha uma característica válida por etapa. A linha só será criada quando você concluir e enviar este kit para a requisição.</p></div>
+                  <div><span className="section-kicker">{editingFactoryItemId ? "EDITANDO KIT ENVIADO" : "MONTADOR PASSO A PASSO"}</span><h3>{editingFactoryItemId ? "Revise o Kit Porta Dalcomad" : "Monte o Kit Porta Dalcomad"}</h3><p>Escolha uma característica válida por etapa. A linha só será criada ou atualizada quando você concluir o montador.</p></div>
                   <div className="factory-step-counter"><strong>{String(factoryWizardStep + 1).padStart(2, "0")}</strong><span>/ {String(factoryWizardSteps.length).padStart(2, "0")}</span></div>
                 </div>
                 <div className="factory-progress" aria-hidden="true"><span style={{ width: `${factoryWizardProgress}%` }} /></div>
-                <div className="factory-step-tabs" role="tablist" aria-label="Etapas para montar o kit">
-                  {factoryWizardSteps.map((step, index) => <button key={step.key} type="button" role="tab" aria-selected={factoryWizardStep === index} aria-current={factoryWizardStep === index ? "step" : undefined} className={factoryWizardStep === index ? "active" : factoryWizardDraft[step.key].trim() ? "done" : ""} onClick={() => setFactoryWizardStep(index)}><b>{String(index + 1).padStart(2, "0")}</b><span>{step.label}</span></button>)}
+                <div className="factory-step-tabs" aria-label="Etapas para montar o kit">
+                  {factoryWizardSteps.map((step, index) => <button key={step.key} type="button" aria-current={factoryWizardStep === index ? "step" : undefined} className={factoryWizardStep === index ? "active" : factoryWizardDraft[step.key].trim() ? "done" : ""} onClick={() => setFactoryWizardStep(index)}><b>{String(index + 1).padStart(2, "0")}</b><span>{step.label}</span></button>)}
                 </div>
                 <div className="factory-locator-body">
                   <div className="factory-locator-copy"><span className="section-kicker">ETAPA {String(factoryWizardStep + 1).padStart(2, "0")}</span><h4>{activeFactoryWizardStep.title}</h4><p>{activeFactoryWizardStep.hint}</p></div>
                   <div className="factory-locator-input-wrap">
                     <label className="factory-locator-field"><span>{activeFactoryWizardStep.label}{activeFactoryWizardStep.optional ? " · opcional" : ""}</span>{activeFactoryWizardUsesSelect ? <select className="factory-locator-select" value={factoryWizardDraft[activeFactoryWizardStep.key]} onChange={(event) => updateFactoryWizard(activeFactoryWizardStep.key, event.target.value)} aria-label={`Etapa ${activeFactoryWizardStep.label}`} autoFocus><option value="">Selecione {activeFactoryWizardStep.label.toLocaleLowerCase("pt-BR")}</option>{activeFactoryWizardOptions.map((option) => <option key={option} value={option}>{option}</option>)}<option value="A confirmar">A confirmar</option></select> : <input value={factoryWizardDraft[activeFactoryWizardStep.key]} onChange={(event) => updateFactoryWizard(activeFactoryWizardStep.key, event.target.value)} placeholder={activeFactoryWizardStep.placeholder} list={activeFactoryWizardStep.listId} inputMode={activeFactoryWizardStep.key === "priceWithoutLock" || activeFactoryWizardStep.key === "priceWithLock" ? "decimal" : undefined} autoComplete="off" aria-label={`Etapa ${activeFactoryWizardStep.label}`} autoFocus />}</label>
                     <div className="factory-suggestion-row" aria-label={`Sugestões para ${activeFactoryWizardStep.label}`}>
-                      {activeFactoryWizardOptions.map((option) => <button key={option} type="button" className={`${factoryWizardDraft[activeFactoryWizardStep.key] === option ? "selected" : ""}${activeFactoryWizardStep.key === "color" ? " factory-color-option" : ""}`} onClick={() => updateFactoryWizard(activeFactoryWizardStep.key, option)}>{activeFactoryWizardStep.key === "color" && <span className="factory-color-swatch" style={{ background: dalcomadKitSwatches[option] }} aria-hidden="true" />}{option}</button>)}
+                      {activeFactoryWizardOptions.map((option) => <button key={option} type="button" className={`${factoryWizardDraft[activeFactoryWizardStep.key] === option ? "selected" : ""}${activeFactoryWizardStep.key === "color" ? " factory-color-option" : ""}`} onClick={() => updateFactoryWizard(activeFactoryWizardStep.key, option)}>{activeFactoryWizardStep.key === "color" && <span className="factory-color-swatch" style={{ background: getDalcomadKitSwatch(factoryWizardDraft.line, option) }} aria-hidden="true" />}{option}</button>)}
                       <button type="button" className={factoryWizardDraft[activeFactoryWizardStep.key] === "A confirmar" ? "selected pending" : "pending"} onClick={setFactoryWizardPending}>A confirmar</button>
                     </div>
                   </div>
                 </div>
                 <div className="factory-locator-summary" aria-live="polite"><span className="mini-label">PRÉVIA DO KIT · DALCOMAD · KIT PORTA · ABRIR</span><div>{factoryWizardSteps.map((step) => <span key={step.key} className={factoryWizardDraft[step.key].trim() ? "filled" : ""}><b>{step.label}</b>{factoryWizardDraft[step.key].trim() || (step.optional ? "Opcional" : "—")}</span>)}</div></div>
-                <div className="factory-locator-actions"><button className="text-button" type="button" onClick={resetFactoryWizard}>Limpar montador</button><div><button className="button light" type="button" onClick={goToPreviousFactoryWizardStep} disabled={factoryWizardStep === 0}>← Voltar</button>{factoryWizardStep < factoryWizardSteps.length - 1 ? <button className="button dark" type="button" onClick={goToNextFactoryWizardStep}>Próxima etapa <span>→</span></button> : <button className="button primary" type="button" onClick={addFactoryWizardItem}>Enviar kit para a requisição <span>↗</span></button>}</div></div>
+                <div className="factory-locator-actions"><button className="text-button" type="button" onClick={resetFactoryWizard}>{editingFactoryItemId ? "Cancelar edição" : "Limpar montador"}</button><div><button className="button light" type="button" onClick={goToPreviousFactoryWizardStep} disabled={factoryWizardStep === 0}>← Voltar</button>{factoryWizardStep < factoryWizardSteps.length - 1 ? <button className="button dark" type="button" onClick={goToNextFactoryWizardStep}>Próxima etapa <span>→</span></button> : <button className="button primary" type="button" onClick={addFactoryWizardItem}>{editingFactoryItemId ? "Salvar alterações" : "Enviar kit para a requisição"} <span>↗</span></button>}</div></div>
               </section>
 
               <div className="factory-submission-note" role="status" aria-live="polite">
                 <span><b>{filledFactoryItems.length}</b> {filledFactoryItems.length === 1 ? "item preparado" : "itens preparados"}</span>
                 <span>Os kits enviados ficam salvos separadamente na sua conta e podem ser exportados para Excel quando a consulta estiver pronta.</span>
               </div>
+
+              {filledFactoryItems.length > 0 && (
+                <section className="factory-submitted" aria-labelledby="factory-submitted-title">
+                  <div className="factory-submitted-heading"><div><span className="section-kicker">KITS ENVIADOS</span><h3 id="factory-submitted-title">Confira antes de exportar</h3></div><span>{filledFactoryItems.length}/240</span></div>
+                  <div className="factory-submitted-list">
+                    {filledFactoryItems.map((item, index) => (
+                      <article className="factory-submitted-row" key={item.id}>
+                        <span className="factory-row-number">{String(index + 1).padStart(2, "0")}</span>
+                        <div><strong>{item.leafMeasure || "Medida a confirmar"}</strong><small>{[item.line, item.finish, item.color].filter(Boolean).join(" · ") || "Características a confirmar"}</small></div>
+                        <div><strong>{item.requadro || "Requadro a confirmar"}</strong><small>{item.filling || "Preenchimento a confirmar"}</small></div>
+                        <div className="factory-row-actions"><button type="button" onClick={() => editFactoryItem(item)}>Editar</button><button type="button" className="danger-text" onClick={() => removeFactoryItem(item)}>Remover</button></div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              )}
 
               <div className="factory-bottom-bar" role="status" aria-live="polite"><span>✓ Salvo automaticamente na sua conta</span><span>→ Exporte o arquivo depois de finalizar o localizador.</span></div>
             </section>
@@ -3863,9 +4204,9 @@ export default function Home() {
             <div className="brand-tabs">{(Object.keys(brandData) as BrandId[]).map((id) => <button key={id} className={brand === id ? "active" : ""} onClick={() => selectBrand(id)}><span className="brand-tab-mark" style={{ background: brandData[id].accent }} /> <strong>{brandData[id].short}</strong><small>{brandData[id].descriptor}</small></button>)}</div>
             <div className="brand-profile panel"><div className="brand-profile-main"><div className="profile-orb" style={{ background: currentBrand.accent }}><span>{currentBrand.short.slice(0, 2).toUpperCase()}</span></div><div><span className="section-kicker">{currentBrand.catalog}</span><h2>{currentBrand.name}</h2><p>{currentBrand.summary}</p><a className="official-link" href={currentBrand.official} target="_blank" rel="noreferrer">Abrir canal oficial <span>↗</span></a></div></div><div className="profile-columns"><div><span className="mini-label">INDICAR QUANDO</span>{currentBrand.when.map((item) => <span className="profile-tag" key={item}>+ {item}</span>)}</div><div><span className="mini-label">NÃO ESQUECER</span>{currentBrand.guardrails.map((item) => <p className="guardrail" key={item}>✓ {item}</p>)}</div></div></div>
             <div className="catalog-tools"><div className="search-box"><span>⌕</span><input value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} placeholder={`Pesquisar em ${currentBrand.short}...`} aria-label="Pesquisar no catálogo" /></div><select value={catalogFamily} onChange={(event) => setCatalogFamily(event.target.value)} aria-label="Filtrar família">{families.map((family) => <option key={family}>{family}</option>)}</select><span className="result-count">{filteredCatalog.length} resultados</span></div>
-            <div className="catalog-grid">{filteredCatalog.map((item) => <article className="catalog-card" key={item.id} role="button" tabIndex={0} aria-label={`Abrir ficha de ${item.title}`} onClick={() => setSelectedCatalog(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedCatalog(item); } }}><div className="card-meta"><span className="family-badge">{item.family}</span><span className="source-dot" title={item.source}>●</span></div><h3>{item.title}</h3>{item.code && <div className="catalog-code">{item.code}</div>}<p>{item.spec}</p><div className="card-bottom"><span>Indicar para <strong>{item.bestFor.split(",")[0]}</strong></span><button onClick={(event) => { event.stopPropagation(); setSelectedCatalog(item); }}>Ver ficha <span>→</span></button></div></article>)}</div>
+            {filteredCatalog.length > 0 ? <div className="catalog-grid">{filteredCatalog.map((item) => <article className="catalog-card" key={item.id}><div className="card-meta"><span className="family-badge">{item.family}</span><span className="source-dot" title={item.source}>●</span></div><h3>{item.title}</h3>{item.code && <div className="catalog-code">{item.code}</div>}<p>{item.spec}</p><div className="card-bottom"><span>Indicar para <strong>{item.bestFor.split(",")[0]}</strong></span><button type="button" aria-label={`Abrir ficha de ${item.title}`} onClick={(event) => { catalogTriggerRef.current = event.currentTarget; setSelectedCatalog(item); }}>Ver ficha <span>→</span></button></div></article>)}</div> : <div className="empty-state catalog-empty"><strong>Nenhuma ficha encontrada.</strong><span>Revise o termo ou limpe os filtros para ver todas as opções desta marca.</span><button className="button light" type="button" onClick={() => { setCatalogSearch(""); setCatalogFamily("Todas"); }}>Limpar filtros</button></div>}
             <div className="catalog-note"><span>i</span><p>Os catálogos enviados são referências comerciais. Código, cor, medida final, ferragem, disponibilidade, prazo e composição devem ser confirmados antes do fechamento.</p></div>
-            {selectedCatalog && <div className="drawer-backdrop" onClick={() => setSelectedCatalog(null)}><aside className="catalog-drawer" role="dialog" aria-modal="true" aria-label={`Ficha de ${selectedCatalog.title}`} onClick={(event) => event.stopPropagation()}><button className="drawer-close" aria-label="Fechar ficha" onClick={() => setSelectedCatalog(null)}>×</button><span className="family-badge">{selectedCatalog.family}</span><h2>{selectedCatalog.title}</h2><p className="drawer-spec">{selectedCatalog.spec}</p><div className="drawer-section"><span className="mini-label">QUANDO INDICAR</span><p>{selectedCatalog.bestFor}</p></div><div className="drawer-section pitch"><span className="mini-label">ARGUMENTO DE VENDA</span><p>“{selectedCatalog.pitch}”</p><div className="drawer-actions"><button className="copy-button" onClick={() => copyMessage(selectedCatalog.pitch)}>Copiar argumento <span>⧉</span></button><button className="copy-button" onClick={() => { setMessageLine(selectedCatalog.title); setSelectedCatalog(null); navigate("messages"); }}>Planejar mensagem <span>→</span></button></div></div><div className="drawer-section"><span className="mini-label">CONFIRMAR ANTES DE FECHAR</span>{selectedCatalog.checks.map((check) => <label className="drawer-check" key={check}><input type="checkbox" checked={drawerChecks[selectedCatalog.id]?.includes(check) ?? false} onChange={() => toggleCatalogCheck(selectedCatalog.id, check)} /><span className="fake-checkbox">✓</span>{check}</label>)}</div><div className="drawer-source"><span>Fonte</span><strong>{selectedCatalog.source}</strong><small>{brandData[selectedCatalog.brand].catalog}</small></div></aside></div>}
+            {selectedCatalog && <div className="drawer-backdrop" onClick={() => setSelectedCatalog(null)}><aside className="catalog-drawer" ref={catalogDialogRef} role="dialog" aria-modal="true" aria-label={`Ficha de ${selectedCatalog.title}`} onClick={(event) => event.stopPropagation()}><button className="drawer-close" aria-label="Fechar ficha" onClick={() => setSelectedCatalog(null)}>×</button><span className="family-badge">{selectedCatalog.family}</span><h2>{selectedCatalog.title}</h2><p className="drawer-spec">{selectedCatalog.spec}</p><div className="drawer-section"><span className="mini-label">QUANDO INDICAR</span><p>{selectedCatalog.bestFor}</p></div><div className="drawer-section pitch"><span className="mini-label">ARGUMENTO DE VENDA</span><p>“{selectedCatalog.pitch}”</p><div className="drawer-actions"><button className="copy-button" onClick={() => copyMessage(selectedCatalog.pitch)}>Copiar argumento <span>⧉</span></button><button className="copy-button" onClick={() => { setMessageLine(selectedCatalog.title); setSelectedCatalog(null); navigate("messages"); }}>Planejar mensagem <span>→</span></button></div></div><div className="drawer-section"><span className="mini-label">CONFIRMAR ANTES DE FECHAR</span>{selectedCatalog.checks.map((check) => <label className="drawer-check" key={check}><input type="checkbox" checked={drawerChecks[selectedCatalog.id]?.includes(check) ?? false} onChange={() => toggleCatalogCheck(selectedCatalog.id, check)} /><span className="fake-checkbox">✓</span>{check}</label>)}</div><div className="drawer-source"><span>Fonte</span><strong>{selectedCatalog.source}</strong><small>{brandData[selectedCatalog.brand].catalog}</small></div></aside></div>}
           </div>
         )}
 
@@ -3889,7 +4230,7 @@ export default function Home() {
           </div>
         )}
       </section>
-      {toast && <div className="toast" role="status" aria-live="polite">✓ {toast}</div>}
+      {toast && <div className={`toast ${toast.kind}`} role={toast.kind === "error" ? "alert" : "status"} aria-live={toast.kind === "error" ? "assertive" : "polite"}>{toast.kind === "success" ? "✓" : toast.kind === "error" ? "!" : "i"} {toast.message}</div>}
     </main>
   );
 }

@@ -15,9 +15,6 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Guia Comercial Mult Portas",
   description: "Guia comercial interno da Mult Portas: vendas, catálogo, timing, controle e treino de conversa.",
-  other: {
-    "codex-preview": "development",
-  },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

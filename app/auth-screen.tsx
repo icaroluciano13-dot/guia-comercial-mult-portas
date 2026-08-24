@@ -47,11 +47,11 @@ export function AuthScreen({ mode, setMode, form, setForm, error, busy, onSubmit
           <p>{isRegister ? "Cada funcionário terá seus próprios registros, pendências e progresso." : "Use seu usuário e senha para abrir os dados da sua conta."}</p>
         </div>
 
-        <div className="auth-tabs" role="tablist" aria-label="Acesso e cadastro">
-          <button type="button" role="tab" aria-selected={!isRegister} className={!isRegister ? "active" : ""} onClick={() => setMode("login")}>
+        <div className="auth-tabs" role="group" aria-label="Acesso e cadastro">
+          <button type="button" aria-pressed={!isRegister} className={!isRegister ? "active" : ""} onClick={() => setMode("login")}>
             Entrar
           </button>
-          <button type="button" role="tab" aria-selected={isRegister} className={isRegister ? "active" : ""} onClick={() => setMode("register")}>
+          <button type="button" aria-pressed={isRegister} className={isRegister ? "active" : ""} onClick={() => setMode("register")}>
             Cadastro
           </button>
         </div>

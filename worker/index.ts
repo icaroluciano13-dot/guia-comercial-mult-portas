@@ -53,7 +53,7 @@ const worker = {
     }
 
     const response = await handler.fetch(request, env, ctx);
-    return url.pathname.startsWith("/api/") ? withApiSecurityHeaders(response) : response;
+    return withApiSecurityHeaders(response);
   },
 };
 

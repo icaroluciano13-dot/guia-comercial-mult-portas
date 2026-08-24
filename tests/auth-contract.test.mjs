@@ -85,7 +85,45 @@ test("admin policy delegates trusted frontend checks and keeps the password serv
 
   const securitySource = await readFile(new URL("../app/api/_security.ts", import.meta.url), "utf8");
   assert.doesNotMatch(securitySource, /github\.io/);
-  assert.match(securitySource, /https:\/\/guia-comercial-mult-portas\.eletrovale-cont\.chatgpt\.site/);
+  assert.match(securitySource, /new URL\(origin\)\.origin === requestOrigin/);
+});
+
+test("auth rejects malformed and oversized bodies before storage work", async () => {
+  const worker = await loadWorker();
+  const malformedLogin = await requestJson(worker, "/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: 123, password: "senha" }),
+  });
+  assert.equal(malformedLogin.response.status, 400);
+
+  const malformedRegister = await requestJson(worker, "/api/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ displayName: {}, username: "teste", branch: "Araraquara", password: "senha-segura" }),
+  });
+  assert.equal(malformedRegister.response.status, 400);
+
+  const oversizedLogin = await requestJson(worker, "/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "teste", password: "x".repeat(9_000) }),
+  });
+  assert.equal(oversizedLogin.response.status, 413);
+});
+
+test("login attempts are rate limited before repeated expensive authentication", async () => {
+  const worker = await loadWorker();
+  let latest;
+  for (let attempt = 0; attempt < 9; attempt += 1) {
+    latest = await requestJson(worker, "/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "cf-connecting-ip": "203.0.113.77" },
+      body: JSON.stringify({ username: "rate-limit-user", password: "senha-incorreta" }),
+    });
+  }
+  assert.equal(latest.response.status, 429);
+  assert.ok(Number(latest.response.headers.get("retry-after")) > 0);
 });
 
 test("admin login rejects an unapproved web origin", async () => {
@@ -129,6 +167,7 @@ test("switching roles clears the opposite authentication cookie", async () => {
 
 test("admin profile management exposes protected create, edit and delete routes", async () => {
   const { readFile } = await import("node:fs/promises");
+  const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const collectionRoute = await readFile(new URL("../app/api/admin/users/route.ts", import.meta.url), "utf8");
   const itemRoute = await readFile(new URL("../app/api/admin/users/[id]/route.ts", import.meta.url), "utf8");
   assert.match(collectionRoute, /export async function POST/);
@@ -138,6 +177,10 @@ test("admin profile management exposes protected create, edit and delete routes"
   assert.match(itemRoute, /employeeSessions/);
   assert.match(itemRoute, /employeeData/);
   assert.match(itemRoute, /getAdminSession/);
+  assert.match(pageSource, /detailsRequestRef/);
+  assert.match(pageSource, /detailsRequestRef\.current\?\.id !== requestId/);
+  assert.match(pageSource, /detailsError \? \(/);
+  assert.match(pageSource, /value\.split\("\|", 1\)\[0\]/);
 });
 
 test("admin refresh action remains legible while loading", async () => {
@@ -163,6 +206,7 @@ test("employee authentication UI stays separate from the guide workspace", async
 test("employees can securely edit their own profile without reloading account data", async () => {
   const { readFile } = await import("node:fs/promises");
   const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const profileRoute = await readFile(new URL("../app/api/auth/profile/route.ts", import.meta.url), "utf8");
   assert.match(pageSource, /className="profile-button"/);
   assert.match(pageSource, /await flushPendingState\(\)/);
@@ -176,6 +220,8 @@ test("employees can securely edit their own profile without reloading account da
   assert.match(profileRoute, /employeeSessions/);
   assert.match(profileRoute, /createSession/);
   assert.match(profileRoute, /Esse usuário já está cadastrado/);
+  assert.doesNotMatch(styles, /\.profile-button, \.user-chip\s*\{\s*display:\s*none/);
+  assert.match(pageSource, /button:not\(\[disabled\]\)/);
 });
 
 test("employee-facing interface contains no AI product branding", async () => {
@@ -247,6 +293,39 @@ test("employee data and coach payloads have bounded, defensive parsing", async (
   assert.match(coachRoute, /MAX_COACH_BODY_LENGTH/);
   assert.match(coachRoute, /isRecord\(parsed\)/);
   assert.match(coachRoute, /scenarioSignals/);
+});
+
+test("failed loads and logout cannot silently overwrite or discard employee data", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const dataSource = await readFile(new URL("../app/api/data/route.ts", import.meta.url), "utf8");
+  assert.match(pageSource, /setDataLoadError/);
+  assert.match(pageSource, /Nenhum dado será sobrescrito/);
+  assert.match(pageSource, /readLocalPendingState/);
+  assert.match(pageSource, /writeLocalPendingState/);
+  assert.match(pageSource, /keepalive: true/);
+  assert.match(pageSource, /if \(!\(await flushPendingState\(\)\)\)/);
+  assert.match(pageSource, /if \(!response\.ok \|\| data\.ok !== true\)/);
+  assert.match(dataSource, /baseRevision/);
+  assert.match(dataSource, /status[^\n]*409|, 409\)/);
+  assert.match(dataSource, /and\(eq\(employeeData\.userId, user\.id\), eq\(employeeData\.updatedAt, baseRevision\)\)/);
+  assert.match(dataSource, /current\?\.stateJson === stateJson/);
+  assert.match(dataSource, /crypto\.randomUUID\(\)/);
+  assert.match(dataSource, /new Date\(\)\.toISOString\(\).*crypto\.randomUUID\(\)/s);
+  assert.match(dataSource, /dados salvos estão temporariamente indisponíveis/);
+  assert.doesNotMatch(dataSource, /catch\s*\{\s*return emptyResponse\(\);\s*\}/s);
+});
+
+test("training requests and pending microphone access cannot update a stale session", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(pageSource, /trainingRequestRef/);
+  assert.match(pageSource, /requestController\.signal/);
+  assert.match(pageSource, /trainingRequestRef\.current\?\.id !== requestId/);
+  assert.match(pageSource, /cancelTrainingRequest\(\);\s*cancelPendingVoiceCapture\(\);\s*if \(isRecording\) stopVoiceCapture\(\);/s);
+  assert.match(pageSource, /voiceCaptureAttemptRef\.current !== attempt/);
+  assert.match(pageSource, /stream\.getTracks\(\)\.forEach\(\(track\) => track\.stop\(\)\)/);
+  assert.match(pageSource, /if \(authUserId\) return;/);
 });
 
 test("coach endpoint rejects unauthenticated requests with JSON", async () => {

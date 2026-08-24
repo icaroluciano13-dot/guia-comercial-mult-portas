@@ -31,6 +31,16 @@ test("untrusted websites cannot perform session-backed mutations", async () => {
   }
 });
 
+test("an attached custom domain can perform exact same-origin mutations", async () => {
+  const worker = await loadWorker();
+  const response = await worker.fetch(new Request("https://www.multportasguia.com/api/auth/logout", {
+    method: "POST",
+    headers: { Origin: "https://www.multportasguia.com" },
+  }), runtime(), executionContext());
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(await response.text()), { ok: true });
+});
+
 test("API responses receive defensive browser headers", async () => {
   const worker = await loadWorker();
   const response = await worker.fetch(new Request("http://localhost/api/auth/logout", { method: "POST" }), runtime(), executionContext());
@@ -38,4 +48,13 @@ test("API responses receive defensive browser headers", async () => {
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow, noarchive");
   assert.equal(response.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+});
+
+test("HTML and robots responses are protected from indexing and framing", async () => {
+  const worker = await loadWorker();
+  const html = await worker.fetch(new Request("http://localhost/", { headers: { Accept: "text/html" } }), runtime(), executionContext());
+  assert.equal(html.status, 200);
+  assert.equal(html.headers.get("x-frame-options"), "DENY");
+  assert.equal(html.headers.get("x-robots-tag"), "noindex, nofollow, noarchive");
 });

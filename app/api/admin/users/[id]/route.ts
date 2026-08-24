@@ -13,6 +13,7 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
 
 async function readUserId(context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
+  if (!/^\d+$/.test(id)) return null;
   const userId = Number.parseInt(id, 10);
   return Number.isInteger(userId) && userId > 0 ? userId : null;
 }

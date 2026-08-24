@@ -4,8 +4,10 @@ import { strFromU8, unzipSync } from "fflate";
 import {
   availableDalcomadKitValues,
   dalcomadKitCombinations,
+  getDalcomadKitSwatch,
   isKnownDalcomadKitCombination,
   normalizeDalcomadKitSelection,
+  parseDalcomadKitPrice,
 } from "../app/lib/dalcomad-kit.mjs";
 import { createWorkbookArchive, downloadWorkbook } from "../app/lib/xlsx-export.mjs";
 
@@ -150,6 +152,19 @@ test("Dalcomad request uses the exact line, finish and color combinations from t
   assert.deepEqual(availableDalcomadKitValues("finish", { line: "SENSE" }), ["RENOLIT"]);
   assert.equal(isKnownDalcomadKitCombination({ line: "ECO", finish: "PET/PVC TX", color: "CINZA URBAN" }), true);
   assert.equal(isKnownDalcomadKitCombination({ line: "ECO", finish: "RENOLIT", color: "BLACK SP" }), false);
+  assert.equal(isKnownDalcomadKitCombination({ line: "ECO", finish: "RENOLIT", color: "A confirmar" }), false);
+  assert.equal(getDalcomadKitSwatch("ECO", "CURUPIXA"), "#b8753f");
+  assert.equal(getDalcomadKitSwatch("STANDART", "CURUPIXA"), "#ad6d3c");
+});
+
+test("Dalcomad prices accept Brazilian currency and reject malformed values", () => {
+  assert.equal(parseDalcomadKitPrice("R$ 1.234,56"), 1234.56);
+  assert.equal(parseDalcomadKitPrice("1234.56"), 1234.56);
+  assert.equal(parseDalcomadKitPrice("1.234"), 1234);
+  assert.equal(parseDalcomadKitPrice(49.9), 49.9);
+  assert.equal(parseDalcomadKitPrice(""), "");
+  assert.equal(parseDalcomadKitPrice("-10"), null);
+  assert.equal(parseDalcomadKitPrice("R$ dez"), null);
 });
 
 test("Dalcomad request migrates earlier spellings into the photographed combinations", () => {
@@ -184,4 +199,9 @@ test("Dalcomad request keeps Kit Porta and ABRIR fixed in the interface and expo
   assert.match(source, /dalcomadKitCombinations\.forEach\(\(item\) => listRows\.push\(\[item\.line, item\.finish, item\.color\]\)\)/);
   assert.match(source, /import \{ downloadWorkbook \} from "\.\/lib\/xlsx-export\.mjs"/);
   assert.doesNotMatch(source, /await import\("\.\/lib\/xlsx-export\.mjs"\)/);
+  assert.match(source, /className="factory-submitted-list"/);
+  assert.match(source, /editFactoryItem/);
+  assert.match(source, /removeFactoryItem/);
+  assert.match(source, /existingIds\.has\(generatedId\)/);
+  assert.match(source, /setFactoryItems\(\[\]\);\s+resetFactoryWizard\(\);/);
 });

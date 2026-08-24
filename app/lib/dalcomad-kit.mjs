@@ -1,5 +1,6 @@
 const PENDING_VALUE = "A confirmar";
 
+/** @type {ReadonlyArray<Readonly<{ line: string, finish: string, color: string, swatch: string }>>} */
 export const dalcomadKitCombinations = Object.freeze([
   Object.freeze({ line: "ECO", finish: "PET/PVC TX", color: "CINZA URBAN", swatch: "#596367" }),
   Object.freeze({ line: "ECO", finish: "PET/PVC TX", color: "BRANCO DIAMANTE", swatch: "#f2f3ef" }),
@@ -13,7 +14,13 @@ export const dalcomadKitCombinations = Object.freeze([
   Object.freeze({ line: "SENSE", finish: "RENOLIT", color: "SIRUS CREAM", swatch: "#d4d0c5" }),
 ]);
 
-/** @param {"line" | "finish" | "color"} key */
+export const dalcomadKitFillings = Object.freeze(["BOONDOOR", "COLMÉIA"]);
+export const dalcomadKitRequadros = Object.freeze(["11CM", "14CM", "16CM", "18CM", "20CM"]);
+
+/**
+ * @param {"line" | "finish" | "color"} key
+ * @returns {string[]}
+ */
 export function uniqueDalcomadKitValues(key) {
   return Array.from(new Set(dalcomadKitCombinations.map((item) => item[key])));
 }
@@ -21,11 +28,49 @@ export function uniqueDalcomadKitValues(key) {
 export const dalcomadKitLines = Object.freeze(uniqueDalcomadKitValues("line"));
 export const dalcomadKitFinishes = Object.freeze(uniqueDalcomadKitValues("finish"));
 export const dalcomadKitColors = Object.freeze(uniqueDalcomadKitValues("color"));
-export const dalcomadKitSwatches = Object.freeze(Object.fromEntries(dalcomadKitCombinations.map((item) => [item.color, item.swatch])));
+export const dalcomadKitSwatches = Object.freeze(Object.fromEntries(dalcomadKitCombinations.map((item) => [`${item.line}|${item.color}`, item.swatch])));
+
+/** @param {string} line @param {string} color */
+export function getDalcomadKitSwatch(line, color) {
+  return dalcomadKitSwatches[`${line}|${color}`]
+    ?? dalcomadKitCombinations.find((item) => item.color === color)?.swatch
+    ?? "transparent";
+}
+
+/**
+ * Converts a manually entered Brazilian price into a safe spreadsheet number.
+ * Blank values remain blank and malformed or negative values return null.
+ * @param {unknown} value
+ * @returns {number | "" | null}
+ */
+export function parseDalcomadKitPrice(value) {
+  if (typeof value === "number") return Number.isFinite(value) && value >= 0 ? value : null;
+  if (typeof value !== "string") return null;
+  const compact = value.trim().replace(/^R\$\s*/i, "").replace(/[\s\u00a0]/g, "");
+  if (!compact) return "";
+  if (!/^[0-9.,]+$/.test(compact)) return null;
+
+  let normalized = compact;
+  if (compact.includes(",")) {
+    if (!/^\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?$/.test(compact) && !/^\d+(?:,\d{1,2})?$/.test(compact)) return null;
+    normalized = compact.replace(/\./g, "").replace(",", ".");
+  } else if ((compact.match(/\./g) ?? []).length > 1) {
+    if (!/^\d{1,3}(?:\.\d{3})+$/.test(compact)) return null;
+    normalized = compact.replace(/\./g, "");
+  } else if (/^\d{1,3}\.\d{3}$/.test(compact)) {
+    normalized = compact.replace(".", "");
+  } else if (!/^\d+(?:\.\d{1,2})?$/.test(compact)) {
+    return null;
+  }
+
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+}
 
 /**
  * @param {"line" | "finish" | "color"} key
  * @param {{ line?: string, finish?: string }} selection
+ * @returns {string[]}
  */
 export function availableDalcomadKitValues(key, selection = {}) {
   const matches = dalcomadKitCombinations.filter((item) => {
@@ -38,13 +83,27 @@ export function availableDalcomadKitValues(key, selection = {}) {
 
 /** @param {{ line?: string, finish?: string, color?: string }} selection */
 export function isKnownDalcomadKitCombination(selection) {
-  const values = [selection.line, selection.finish, selection.color];
-  if (values.some((value) => !value || value === PENDING_VALUE)) return true;
-  return dalcomadKitCombinations.some((item) => item.line === selection.line && item.finish === selection.finish && item.color === selection.color);
+  return dalcomadKitCombinations.some((item) => (
+    (!selection.line || selection.line === PENDING_VALUE || item.line === selection.line)
+    && (!selection.finish || selection.finish === PENDING_VALUE || item.finish === selection.finish)
+    && (!selection.color || selection.color === PENDING_VALUE || item.color === selection.color)
+  ));
 }
 
 function normalizedText(value) {
   return typeof value === "string" ? value.trim().toLocaleUpperCase("pt-BR") : "";
+}
+
+/** @param {unknown} value */
+export function isEligibleDalcomadKitItem(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = /** @type {Record<string, unknown>} */ (value);
+  const manufacturer = normalizedText(item.manufacturer);
+  const description = normalizedText(item.description);
+  const opening = normalizedText(item.opening);
+  return (!manufacturer || manufacturer === "DALCOMAD")
+    && ["KIT PORTA", "KIT PORTA PRONTA", "KIT DE PORTA"].includes(description)
+    && (!opening || opening === "ABRIR");
 }
 
 function allowedValue(value, options, aliases = {}) {

@@ -777,3 +777,61 @@ h1 em { color: #cba66d; font-style: normal; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* stability, accessibility and factory review */
+.save-status.conflict { border-color: #d9a49a; color: #7b4037; background: #fff3f0; }
+.save-status.conflict i { background: #b85649; }
+.sync-reload-button { min-height: 30px; padding: 0 9px; border: 1px solid #d9a49a; border-radius: 7px; color: #7b4037; background: #fff8f6; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.sync-reload-button:hover { border-color: #b85649; background: #fff; }
+.toast.error { border-color: #c98173; background: #7c4036; }
+.toast.info { border-color: #91a8b3; background: #465d68; }
+.catalog-card { cursor: default; }
+.catalog-empty { display: grid; justify-items: center; gap: 9px; }
+.catalog-empty strong { color: #4f5b62; font-size: 14px; }
+.catalog-empty span { color: #67747b; line-height: 1.5; }
+.factory-submitted { margin-top: 15px; padding: 16px; border: 1px solid #d9e1e4; border-radius: 11px; background: #f7f9f9; }
+.factory-submitted-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.factory-submitted-heading h3 { margin-top: 7px; color: #46535a; font-size: 17px; letter-spacing: -.035em; }
+.factory-submitted-heading > span { color: #846137; font-size: 11px; font-weight: 800; }
+.factory-submitted-list { display: grid; gap: 7px; margin-top: 14px; }
+.factory-submitted-row { display: grid; grid-template-columns: 34px minmax(150px, 1.3fr) minmax(135px, 1fr) auto; align-items: center; gap: 12px; padding: 11px 12px; border: 1px solid #dfe5e7; border-radius: 9px; background: #fff; }
+.factory-row-number { color: #a57942; font-size: 10px; font-weight: 900; }
+.factory-submitted-row > div { display: grid; gap: 4px; min-width: 0; }
+.factory-submitted-row strong { overflow: hidden; color: #4c5960; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.factory-submitted-row small { overflow: hidden; color: #65727a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.factory-row-actions { display: flex !important; justify-content: flex-end; gap: 6px !important; }
+.factory-row-actions button { min-height: 32px; padding: 0 9px; border: 1px solid #d6dfe2; border-radius: 7px; color: #536169; background: #f8fafa; font-size: 10px; font-weight: 800; }
+.factory-row-actions .danger-text { border-color: #e2c4be; color: #8c4b40; background: #fff7f5; }
+.factory-step-tabs button, .factory-suggestion-row button, .training-mode-switch button, .training-filters button, .message-suggestions button, .message-brand-suggestions button { min-height: 32px; }
+.timing-item small, .scenario-copy small, .daily-row small, .drawer-source span, .card-bottom > span { color: #66737a; }
+.profile-form label > span, .factory-step-tabs button span, .factory-step-tabs button b, .factory-locator-summary b { font-size: 10px; }
+
+@media (max-width: 800px) {
+  .factory-submitted-row { grid-template-columns: 30px 1fr auto; }
+  .factory-submitted-row > div:nth-of-type(2) { grid-column: 2; }
+  .factory-row-actions { grid-column: 2 / -1; justify-content: flex-start; }
+  .topbar { min-width: 0; }
+  .topbar-actions, .user-area { min-width: 0; }
+}
+
+@media (max-width: 600px) {
+  .topbar { min-height: 64px; height: auto; gap: 7px; padding: 9px 10px; }
+  .mobile-brand { min-width: 0; }
+  .mobile-brand strong { overflow: hidden; max-width: 92px; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar-actions { gap: 5px; }
+  .user-chip { display: none; }
+  .profile-button { min-height: 36px; padding: 0 7px; font-size: 9px; }
+  .logout-button { min-height: 36px; padding: 0 4px; border-left: 0; font-size: 0; }
+  .logout-button::after { content: "Sair"; font-size: 10px; }
+  .save-status { max-width: 96px; min-height: 30px; }
+  .sync-reload-button { max-width: 76px; overflow: hidden; text-overflow: ellipsis; }
+  .factory-submitted { padding: 12px; }
+  .factory-submitted-row { grid-template-columns: 25px minmax(0, 1fr); gap: 8px; }
+  .factory-submitted-row > div:nth-of-type(2), .factory-row-actions { grid-column: 2; }
+  .factory-row-actions button { min-height: 40px; }
+  .toast { right: 12px; bottom: 12px; left: 12px; font-size: 12px; }
+}
+
+@media (max-width: 360px) {
+  .mobile-brand strong { display: none; }
+}

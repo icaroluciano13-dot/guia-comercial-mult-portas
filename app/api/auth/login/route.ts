@@ -4,6 +4,13 @@ import { employeeUsers } from "../../../../db/schema";
 import { ADMIN_PASSWORD, ADMIN_USERNAME, clearedAdminCookie, createAdminSession } from "../../admin/_lib";
 import { rejectUntrustedMutation } from "../../_security";
 import {
+  clearAuthQuota,
+  consumeLoginQuota,
+  loginRateKeys,
+  rateLimitResponse,
+  readBoundedAuthJson,
+} from "../_request-guard";
+import {
   constantTimeEqual,
   clearedSessionCookie,
   createSession,
@@ -29,20 +36,18 @@ async function handleLogin(request: Request) {
   const originError = rejectUntrustedMutation(request);
   if (originError) return originError;
 
-  let body: { username?: string; password?: string };
-  try {
-    const parsed = await request.json() as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return Response.json({ error: "Não foi possível ler o login." }, { status: 400 });
-    }
-    body = parsed as typeof body;
-  } catch {
-    return Response.json({ error: "Não foi possível ler o login." }, { status: 400 });
+  const parsedBody = await readBoundedAuthJson(request, "Não foi possível ler o login.");
+  if ("response" in parsedBody) return parsedBody.response;
+  if (typeof parsedBody.value.username !== "string" || typeof parsedBody.value.password !== "string") {
+    return Response.json({ error: "Informe usuário e senha válidos." }, { status: 400 });
   }
 
-  const username = body.username?.trim() ?? "";
-  const password = body.password ?? "";
+  const username = parsedBody.value.username.trim();
+  const password = parsedBody.value.password;
   if (!username || !password) return Response.json({ error: "Informe usuário e senha." }, { status: 400 });
+  const rateKeys = loginRateKeys(request, username);
+  const retryAfter = consumeLoginQuota(rateKeys);
+  if (retryAfter !== null) return rateLimitResponse(retryAfter);
 
   const adminPasswordMatches = Boolean(ADMIN_PASSWORD) && constantTimeEqual(await digest(password), await digest(ADMIN_PASSWORD));
   if (username.toLocaleLowerCase("pt-BR") === ADMIN_USERNAME && adminPasswordMatches) {
@@ -50,6 +55,7 @@ async function handleLogin(request: Request) {
     const headers = new Headers({ "Cache-Control": "no-store" });
     headers.append("Set-Cookie", session.cookie);
     headers.append("Set-Cookie", clearedSessionCookie(request));
+    clearAuthQuota(rateKeys);
     return Response.json({ admin: true }, { headers });
   }
 
@@ -87,5 +93,6 @@ async function handleLogin(request: Request) {
   const headers = new Headers({ "Cache-Control": "no-store" });
   headers.append("Set-Cookie", session.cookie);
   headers.append("Set-Cookie", clearedAdminCookie(request));
+  clearAuthQuota(rateKeys);
   return Response.json({ user: userPayload(user) }, { headers });
 }

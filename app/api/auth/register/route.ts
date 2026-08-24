@@ -9,6 +9,7 @@ import {
 } from "../_lib";
 import { rejectUntrustedMutation } from "../../_security";
 import { clearedAdminCookie } from "../../admin/_lib";
+import { consumeRegistrationQuota, rateLimitResponse, readBoundedAuthJson } from "../_request-guard";
 
 const allowedBranches = new Set(["Araraquara", "São Carlos"]);
 
@@ -25,22 +26,23 @@ async function handleRegister(request: Request) {
   const originError = rejectUntrustedMutation(request);
   if (originError) return originError;
 
-  let body: { displayName?: string; username?: string; branch?: string; password?: string };
-  try {
-    const parsed = await request.json() as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return Response.json({ error: "Não foi possível ler o cadastro." }, { status: 400 });
-    }
-    body = parsed as typeof body;
-  } catch {
-    return Response.json({ error: "Não foi possível ler o cadastro." }, { status: 400 });
+  const parsedBody = await readBoundedAuthJson(request, "Não foi possível ler o cadastro.");
+  if ("response" in parsedBody) return parsedBody.response;
+  const body = parsedBody.value;
+  if (
+    typeof body.displayName !== "string"
+    || typeof body.username !== "string"
+    || typeof body.branch !== "string"
+    || typeof body.password !== "string"
+  ) {
+    return Response.json({ error: "Preencha o cadastro com dados válidos." }, { status: 400 });
   }
 
-  const displayName = body.displayName?.trim() ?? "";
-  const username = body.username?.trim() ?? "";
+  const displayName = body.displayName.trim();
+  const username = body.username.trim();
   const usernameNormalized = normalizeUsername(username);
-  const branch = body.branch?.trim() ?? "";
-  const password = body.password ?? "";
+  const branch = body.branch.trim();
+  const password = body.password;
 
   if (displayName.length < 2 || displayName.length > 80) {
     return Response.json({ error: "Informe o nome completo do funcionário." }, { status: 400 });
@@ -57,6 +59,8 @@ async function handleRegister(request: Request) {
   if (password.length < 8 || password.length > 120) {
     return Response.json({ error: "A senha deve ter pelo menos 8 caracteres." }, { status: 400 });
   }
+  const retryAfter = consumeRegistrationQuota(request);
+  if (retryAfter !== null) return rateLimitResponse(retryAfter);
 
   const db = await getDb();
   const [existing] = await db.select({ id: employeeUsers.id }).from(employeeUsers).where(eq(employeeUsers.usernameNormalized, usernameNormalized)).limit(1);
