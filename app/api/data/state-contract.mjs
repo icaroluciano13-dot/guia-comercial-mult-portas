@@ -7,7 +7,7 @@ import {
   parseDalcomadKitPrice,
 } from "../../lib/dalcomad-kit.mjs";
 
-export const GUIDE_STATE_VERSION = 3;
+export const GUIDE_STATE_VERSION = 4;
 
 const MAX_COLLECTION = 240;
 const SKILL_IDS = ["acolhimento", "diagnostico", "precisao", "valor", "proximoPasso"];
@@ -122,6 +122,7 @@ function normalizeMessages(value) {
       guarantee: proof.guarantee !== false,
     },
     provider: {
+      profile: provider.profile === "Empresa" ? "Empresa" : "Pedreiro",
       name: cleanString(provider.name, 120),
       type: cleanString(provider.type, 160),
       region: cleanString(provider.region, 160),
