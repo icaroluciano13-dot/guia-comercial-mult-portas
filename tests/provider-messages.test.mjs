@@ -43,19 +43,20 @@ test("separa a apresentação formal de empresas da abordagem próxima para pedr
     profile: "Pedreiro",
     contactName: "Carlos",
     senderName: "Marina",
-    providerType: "Pedreiro ou profissional de obras",
+    providerType: "Pedreiro",
     region: "Araraquara e região",
     objective: "me apresentar e abrir uma possível parceria",
     question: "você atende obras em Araraquara ou cidades da região?",
     tone: "Próximo",
   });
 
-  assert.match(company, /^Olá, Construtora Horizonte\./);
-  assert.match(company, /equipe comercial|sinergia entre nossas empresas|objetivo deste contato/i);
+  assert.match(company, /^Olá, Construtora Horizonte, tudo bem\?/);
+  assert.match(company, /falo pela Mult Portas|valia a pena nos apresentarmos|A ideia é/i);
   assert.doesNotMatch(company, /\ba gente\b|Tudo certo/i);
-  assert.match(bricklayer, /^Oi, Carlos! Tudo certo\?/);
-  assert.match(bricklayer, /\ba gente\b|seria legal/i);
-  assert.doesNotMatch(bricklayer, /sinergia entre nossas empresas|objetivo deste contato/i);
+  assert.match(bricklayer, /^Oi, Carlos! Tudo bem\?/);
+  assert.match(bricklayer, /\ba gente\b|valia a pena/i);
+  assert.doesNotMatch(company, /sinergia|objetivo deste contato|identifiquei que|para direcionarmos/i);
+  assert.doesNotMatch(bricklayer, /sinergia|objetivo deste contato|identifiquei que|para direcionarmos/i);
 });
 
 test("gera mensagens utilizáveis em todos os canais e tons", () => {
@@ -63,7 +64,7 @@ test("gera mensagens utilizáveis em todos os canais e tons", () => {
     for (const channel of ["WhatsApp", "Áudio"]) {
       for (const tone of ["Consultivo", "Direto", "Próximo"]) {
         const message = buildProviderMessage({ profile, channel, tone });
-        assert.ok(message.length > 80 && message.length < 1_400, `${profile}/${channel}/${tone} deve ser concisa`);
+        assert.ok(message.length > 80 && message.length < 900, `${profile}/${channel}/${tone} deve ser concisa`);
         assert.match(message, /Mult Portas/);
         assert.match(message, /\?$/);
         assert.doesNotMatch(message, /undefined|\[object Object\]/);
@@ -74,6 +75,10 @@ test("gera mensagens utilizáveis em todos os canais e tons", () => {
   assert.equal(providerCompanyMessageExamples.length, 4);
   assert.ok(providerMessageExamples.every((example) => example.message.includes("Mult Portas")));
   assert.ok(providerCompanyMessageExamples.every((example) => example.message.includes("Mult Portas")));
+  for (const example of [...providerMessageExamples, ...providerCompanyMessageExamples]) {
+    assert.ok(example.message.length < 600, `${example.id} deve caber em um primeiro contato de WhatsApp`);
+    assert.doesNotMatch(example.message, /sinergia|objetivo deste contato|identifiquei que|para direcionarmos/i);
+  }
 });
 
 test("persiste o planejador de prestadores sem misturar os dados do cliente", () => {
