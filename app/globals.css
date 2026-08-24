@@ -778,6 +778,31 @@ h1 em { color: #cba66d; font-style: normal; }
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
+/* attached catalogs */
+.catalog-documents { margin-top: 14px; padding: 20px 24px; }
+.catalog-documents-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.catalog-documents-heading h2 { margin-top: 6px; color: #46535a; font-size: 18px; letter-spacing: -.04em; }
+.catalog-documents-heading > span { color: #7e898f; font-size: 10px; font-weight: 800; }
+.catalog-document-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); gap: 9px; margin-top: 15px; }
+.catalog-document-card { min-height: 142px; display: flex; flex-direction: column; padding: 14px; border: 1px solid #dfe4e6; border-radius: 10px; color: inherit; background: #fafbfb; text-decoration: none; transition: .2s ease; }
+.catalog-document-card:hover { border-color: #c4a36e; background: #fff; box-shadow: 0 7px 17px rgba(47,56,62,.06); transform: translateY(-2px); }
+.catalog-document-card:focus-visible, .catalog-pdf-link:focus-visible { outline: 3px solid rgba(193,153,91,.35); outline-offset: 2px; }
+.catalog-document-card > div { display: flex; align-items: center; gap: 9px; }
+.catalog-document-card > div > span { width: 25px; height: 25px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 7px; color: #866437; background: #f1e8d7; font-size: 8px; font-weight: 900; }
+.catalog-document-card strong { color: #4d5960; font-size: 11px; }
+.catalog-document-card p { margin-top: 10px; color: #758087; font-size: 9px; line-height: 1.5; }
+.catalog-document-card small { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 12px; color: #8d979c; font-size: 8px; }
+.catalog-document-card small b { color: #98703a; font-size: 9px; }
+.catalog-pdf-link { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 20px; padding: 0 13px; border: 1px solid #d7bd92; border-radius: 8px; color: #75552e; background: #fbf5eb; font-size: 10px; font-weight: 900; text-decoration: none; }
+.catalog-pdf-link:hover { border-color: #b88a4a; background: #fff; }
+
+@media (max-width: 600px) {
+  .catalog-documents { padding: 17px; }
+  .catalog-documents-heading { align-items: flex-start; }
+  .catalog-document-grid { grid-template-columns: 1fr; }
+  .catalog-document-card { min-height: 132px; }
+}
+
 /* stability, accessibility and factory review */
 .save-status.conflict { border-color: #d9a49a; color: #7b4037; background: #fff3f0; }
 .save-status.conflict i { background: #b85649; }

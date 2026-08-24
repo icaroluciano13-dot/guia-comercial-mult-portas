@@ -20,7 +20,7 @@ import {
 import { downloadWorkbook } from "./lib/xlsx-export.mjs";
 
 type Section = "overview" | "script" | "seller" | "training" | "timing" | "messages" | "factory" | "catalog" | "control" | "management";
-type BrandId = "dalcomad" | "destak" | "casmavi" | "aluan" | "brasil" | "crv" | "lucasa" | "riobras";
+type BrandId = "dalcomad" | "destak" | "casmavi" | "aluan" | "brimak" | "brasil" | "crv" | "lucasa" | "riobras";
 type Priority = "Alta" | "Média" | "Baixa";
 type TrainingLevel = "Básico" | "Intermediário" | "Avançado";
 type TrainingFilter = "Todos" | TrainingLevel;
@@ -242,6 +242,14 @@ type CatalogItem = {
   pitch: string;
   checks: string[];
   source: "Catálogo enviado" | "Catálogo + site oficial" | "Guia tático + site oficial" | "Site oficial (catálogo não anexado)";
+  documentHref?: string;
+};
+
+type CatalogDocument = {
+  title: string;
+  description: string;
+  href: string;
+  pages: number;
 };
 
 type LocalFollowUp = {
@@ -949,6 +957,7 @@ const brandData: Record<BrandId, {
   guardrails: string[];
   official: string;
   catalog: string;
+  documents?: CatalogDocument[];
 }> = {
   dalcomad: {
     name: "Dalcomad | Kit Porta Pronta e Rodapés",
@@ -993,6 +1002,49 @@ const brandData: Record<BrandId, {
     guardrails: ["Confirmar linha, cor, número de folhas, grade e medida.", "As páginas oficiais destacam branco, preto e brilhante em famílias diferentes; não generalizar para todo item.", "Assistência técnica exige nome do produto, medidas, quantidade, cor e evidências do problema."],
     official: "https://aluanesquadrias.com.br/",
     catalog: "CATÁLOGO ALUAN 2024.pdf",
+  },
+  brimak: {
+    name: "Brimak | Portas e Janelas",
+    short: "Brimak",
+    descriptor: "Alumínio, PVC e puxadores",
+    accent: "#d9a91e",
+    summary: "Portfólio de esquadrias de alumínio e PVC com linhas para entrada, circulação, iluminação, ventilação e aproveitamento de espaço.",
+    when: ["porta ou janela de alumínio", "entrada com pivotante", "vão com solução de correr", "conforto térmico e acústico em PVC"],
+    guardrails: ["Confirmar linha, tipologia, medida, número de folhas, cor, vidro e ferragens do item.", "As cores e composições mudam entre Elite, SUPER 25, L25 e PVC; não generalizar uma opção para todo o portfólio.", "O catálogo geral de 2018 é uma referência histórica: validar modelo, acabamento, estoque e prazo antes de cotar."],
+    official: "https://www.brimak.com.br/",
+    catalog: "5 catálogos Brimak anexados · edições 2018–2025",
+    documents: [
+      {
+        title: "Linha Elite",
+        description: "Pivotantes, janelas, venezianas, portas de correr e basculantes.",
+        href: "/catalogos/brimak-linha-elite.pdf",
+        pages: 22,
+      },
+      {
+        title: "Linha SUPER 25",
+        description: "Portas pivotantes, de giro, clássicas, de correr e portas-balcão.",
+        href: "/catalogos/brimak-linha-super-25.pdf",
+        pages: 26,
+      },
+      {
+        title: "Linha L25",
+        description: "Portas camarão, suspensas e modelos clássicos de alumínio.",
+        href: "/catalogos/brimak-linha-l25.pdf",
+        pages: 12,
+      },
+      {
+        title: "Smart Solutions PVC",
+        description: "Portas e janelas de PVC para diferentes sistemas de abertura.",
+        href: "/catalogos/brimak-portas-janelas-pvc.pdf",
+        pages: 8,
+      },
+      {
+        title: "Catálogo geral 2018",
+        description: "Referência histórica das linhas Brilhante, Branca e Preta.",
+        href: "/catalogos/brimak-catalogo-2018.pdf",
+        pages: 20,
+      },
+    ],
   },
   brasil: {
     name: "Brasil Esquadrias",
@@ -1039,6 +1091,9 @@ const brandData: Record<BrandId, {
     catalog: "Catálogo oficial online — arquivo não anexado",
   },
 };
+
+const studiedCatalogCount = 10;
+const studiedBrandCount = Object.keys(brandData).length;
 
 const catalogItems: CatalogItem[] = [
   {
@@ -1112,6 +1167,71 @@ const catalogItems: CatalogItem[] = [
     pitch: "Além da porta, posso conferir se rodapé ou outro complemento resolve uma parte da obra e evita que você precise procurar outro fornecedor.",
     checks: ["altura e acabamento do rodapé", "quantidade de barras", "espessura e aplicação do compensado", "valor separado da porta"],
     source: "Guia tático + site oficial",
+  },
+  {
+    id: "brimak-elite",
+    brand: "brimak",
+    family: "Linha Elite",
+    title: "Portas e janelas Linha Elite",
+    code: "pivotantes · correr · venezianas · basculantes",
+    spec: "Linha de alumínio com portas de entrada, janelas de 2, 3 e 4 folhas, venezianas, portas de correr e basculantes, em diferentes composições e acabamentos.",
+    bestFor: "Entrada principal, dormitórios, fachadas e vãos que pedem iluminação, ventilação ou abertura de correr.",
+    pitch: "A Elite reúne soluções para a fachada e para os demais vãos; eu separo a tipologia certa e confirmo medida, folhas, cor e vidro antes da cotação.",
+    checks: ["modelo e sistema de abertura", "medida e número de folhas", "cor e tipo de vidro", "puxador, fechadura, persiana ou grade"],
+    source: "Catálogo enviado",
+    documentHref: "/catalogos/brimak-linha-elite.pdf",
+  },
+  {
+    id: "brimak-super-25",
+    brand: "brimak",
+    family: "Linha SUPER 25",
+    title: "Portas Linha SUPER 25",
+    code: "pivotantes · giro · clássicas · correr e balcão",
+    spec: "Linha de portas de alumínio com modelos pivotantes, de giro, lambril, clássicos e conjuntos de correr ou balcão com 2, 3, 4 e 6 folhas.",
+    bestFor: "Entrada, sala, área de serviço, varanda, sacada e vãos maiores com necessidade de passagem e iluminação.",
+    pitch: "A SUPER 25 permite comparar presença na entrada e ganho de passagem nos modelos de correr; definimos primeiro o uso do vão e depois o desenho.",
+    checks: ["pivotante, giro, correr ou balcão", "medida e quantidade de folhas", "cor, vidro e lambril", "puxador, fechadura e sentido de abertura"],
+    source: "Catálogo enviado",
+    documentHref: "/catalogos/brimak-linha-super-25.pdf",
+  },
+  {
+    id: "brimak-l25",
+    brand: "brimak",
+    family: "Linha L25",
+    title: "Portas de alumínio Linha L25",
+    code: "camarão · suspensas · clássicas",
+    spec: "Linha de portas para uso interno e entrada, com modelos camarão, suspensos e clássicos; as soluções sem giro ajudam a aproveitar melhor a passagem.",
+    bestFor: "Divisão de ambientes com pouco espaço, portas internas e entradas que pedem solução funcional e custo-benefício.",
+    pitch: "Quando o giro atrapalha, camarão ou suspensa podem liberar a circulação; para a entrada, comparamos os modelos clássicos da mesma linha.",
+    checks: ["camarão, suspensa ou clássica", "espaço de recolhimento e vão livre", "medida, cor e vidro", "kit de arremates e ferragens"],
+    source: "Catálogo enviado",
+    documentHref: "/catalogos/brimak-linha-l25.pdf",
+  },
+  {
+    id: "brimak-pvc",
+    brand: "brimak",
+    family: "Smart Solutions PVC",
+    title: "Portas e janelas de PVC",
+    code: "pivotantes · giro · correr · janelas · maxim-ar",
+    spec: "Esquadrias com perfis de PVC multicâmaras e reforços internos, incluindo portas pivotantes e de giro, sistemas de correr, janelas e maxim-ar.",
+    bestFor: "Projetos que priorizam conforto térmico e acústico, áreas sujeitas à umidade e vãos com solução de correr ou maxim-ar.",
+    pitch: "O PVC entra quando conforto e vedação pesam na decisão; eu confirmo a tipologia, o vidro e a instalação adequada para comparar de forma justa.",
+    checks: ["sistema de abertura", "medida e reforço do vão", "tipo de vidro e persiana", "cor, ferragens e requisitos de instalação"],
+    source: "Catálogo enviado",
+    documentHref: "/catalogos/brimak-portas-janelas-pvc.pdf",
+  },
+  {
+    id: "brimak-general-2018",
+    brand: "brimak",
+    family: "Catálogo geral",
+    title: "Linhas Brilhante, Branca e Preta",
+    code: "catálogo histórico de produtos · edição 2018",
+    spec: "Referência de portas, janelas, venezianas, basculantes e puxadores com acabamentos anodizado brilhante e pintura eletrostática branca ou preta.",
+    bestFor: "Identificar famílias e modelos antigos trazidos pelo cliente e preparar uma consulta de equivalência atual.",
+    pitch: "Este material ajuda a reconhecer o produto, mas a edição é de 2018; uso como referência e confirmo a versão atual antes de prometer disponibilidade.",
+    checks: ["modelo e código reconhecido", "linha e acabamento", "medida, vidro e puxador", "equivalência, disponibilidade e prazo atuais"],
+    source: "Catálogo enviado",
+    documentHref: "/catalogos/brimak-catalogo-2018.pdf",
   },
   {
     id: "destak-kit",
@@ -3827,7 +3947,7 @@ export default function Home() {
         <div className="sidebar-bottom">
           <div className="source-mini">
             <span className="live-dot" />
-            <div><strong>Base estudada</strong><small>5 catálogos · 8 marcas</small></div>
+            <div><strong>Base estudada</strong><small>{studiedCatalogCount} catálogos · {studiedBrandCount} marcas</small></div>
           </div>
           <div className="sidebar-foot">Dados separados por funcionário · {today}</div>
         </div>
@@ -4200,13 +4320,14 @@ export default function Home() {
 
         {section === "catalog" && (
           <div className="page-content">
-            <div className="section-intro catalog-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> INTELIGÊNCIA DE PRODUTO</span><h1>Catálogo de decisão,<br /><em>não de confusão.</em></h1><p>Pesquise por marca, família ou modelo. Use o argumento e confira os pontos técnicos antes de prometer.</p></div><div className="catalog-count"><strong>{catalogItems.length}</strong><span>fichas comerciais</span><small>5 catálogos · 8 marcas</small></div></div>
+            <div className="section-intro catalog-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> INTELIGÊNCIA DE PRODUTO</span><h1>Catálogo de decisão,<br /><em>não de confusão.</em></h1><p>Pesquise por marca, família ou modelo. Use o argumento e confira os pontos técnicos antes de prometer.</p></div><div className="catalog-count"><strong>{catalogItems.length}</strong><span>fichas comerciais</span><small>{studiedCatalogCount} catálogos · {studiedBrandCount} marcas</small></div></div>
             <div className="brand-tabs">{(Object.keys(brandData) as BrandId[]).map((id) => <button key={id} className={brand === id ? "active" : ""} onClick={() => selectBrand(id)}><span className="brand-tab-mark" style={{ background: brandData[id].accent }} /> <strong>{brandData[id].short}</strong><small>{brandData[id].descriptor}</small></button>)}</div>
             <div className="brand-profile panel"><div className="brand-profile-main"><div className="profile-orb" style={{ background: currentBrand.accent }}><span>{currentBrand.short.slice(0, 2).toUpperCase()}</span></div><div><span className="section-kicker">{currentBrand.catalog}</span><h2>{currentBrand.name}</h2><p>{currentBrand.summary}</p><a className="official-link" href={currentBrand.official} target="_blank" rel="noreferrer">Abrir canal oficial <span>↗</span></a></div></div><div className="profile-columns"><div><span className="mini-label">INDICAR QUANDO</span>{currentBrand.when.map((item) => <span className="profile-tag" key={item}>+ {item}</span>)}</div><div><span className="mini-label">NÃO ESQUECER</span>{currentBrand.guardrails.map((item) => <p className="guardrail" key={item}>✓ {item}</p>)}</div></div></div>
+            {currentBrand.documents?.length ? <section className="catalog-documents panel" aria-label={`Catálogos em PDF de ${currentBrand.short}`}><div className="catalog-documents-heading"><div><span className="section-kicker">ARQUIVOS PARA CONSULTA</span><h2>Catálogos completos em PDF</h2></div><span>{currentBrand.documents.length} arquivos</span></div><div className="catalog-document-grid">{currentBrand.documents.map((document, index) => <a className="catalog-document-card" href={document.href} target="_blank" rel="noreferrer" key={document.href}><div><span>{String(index + 1).padStart(2, "0")}</span><strong>{document.title}</strong></div><p>{document.description}</p><small>{document.pages} páginas <b>Abrir PDF ↗</b></small></a>)}</div></section> : null}
             <div className="catalog-tools"><div className="search-box"><span>⌕</span><input value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} placeholder={`Pesquisar em ${currentBrand.short}...`} aria-label="Pesquisar no catálogo" /></div><select value={catalogFamily} onChange={(event) => setCatalogFamily(event.target.value)} aria-label="Filtrar família">{families.map((family) => <option key={family}>{family}</option>)}</select><span className="result-count">{filteredCatalog.length} resultados</span></div>
             {filteredCatalog.length > 0 ? <div className="catalog-grid">{filteredCatalog.map((item) => <article className="catalog-card" key={item.id}><div className="card-meta"><span className="family-badge">{item.family}</span><span className="source-dot" title={item.source}>●</span></div><h3>{item.title}</h3>{item.code && <div className="catalog-code">{item.code}</div>}<p>{item.spec}</p><div className="card-bottom"><span>Indicar para <strong>{item.bestFor.split(",")[0]}</strong></span><button type="button" aria-label={`Abrir ficha de ${item.title}`} onClick={(event) => { catalogTriggerRef.current = event.currentTarget; setSelectedCatalog(item); }}>Ver ficha <span>→</span></button></div></article>)}</div> : <div className="empty-state catalog-empty"><strong>Nenhuma ficha encontrada.</strong><span>Revise o termo ou limpe os filtros para ver todas as opções desta marca.</span><button className="button light" type="button" onClick={() => { setCatalogSearch(""); setCatalogFamily("Todas"); }}>Limpar filtros</button></div>}
             <div className="catalog-note"><span>i</span><p>Os catálogos enviados são referências comerciais. Código, cor, medida final, ferragem, disponibilidade, prazo e composição devem ser confirmados antes do fechamento.</p></div>
-            {selectedCatalog && <div className="drawer-backdrop" onClick={() => setSelectedCatalog(null)}><aside className="catalog-drawer" ref={catalogDialogRef} role="dialog" aria-modal="true" aria-label={`Ficha de ${selectedCatalog.title}`} onClick={(event) => event.stopPropagation()}><button className="drawer-close" aria-label="Fechar ficha" onClick={() => setSelectedCatalog(null)}>×</button><span className="family-badge">{selectedCatalog.family}</span><h2>{selectedCatalog.title}</h2><p className="drawer-spec">{selectedCatalog.spec}</p><div className="drawer-section"><span className="mini-label">QUANDO INDICAR</span><p>{selectedCatalog.bestFor}</p></div><div className="drawer-section pitch"><span className="mini-label">ARGUMENTO DE VENDA</span><p>“{selectedCatalog.pitch}”</p><div className="drawer-actions"><button className="copy-button" onClick={() => copyMessage(selectedCatalog.pitch)}>Copiar argumento <span>⧉</span></button><button className="copy-button" onClick={() => { setMessageLine(selectedCatalog.title); setSelectedCatalog(null); navigate("messages"); }}>Planejar mensagem <span>→</span></button></div></div><div className="drawer-section"><span className="mini-label">CONFIRMAR ANTES DE FECHAR</span>{selectedCatalog.checks.map((check) => <label className="drawer-check" key={check}><input type="checkbox" checked={drawerChecks[selectedCatalog.id]?.includes(check) ?? false} onChange={() => toggleCatalogCheck(selectedCatalog.id, check)} /><span className="fake-checkbox">✓</span>{check}</label>)}</div><div className="drawer-source"><span>Fonte</span><strong>{selectedCatalog.source}</strong><small>{brandData[selectedCatalog.brand].catalog}</small></div></aside></div>}
+            {selectedCatalog && <div className="drawer-backdrop" onClick={() => setSelectedCatalog(null)}><aside className="catalog-drawer" ref={catalogDialogRef} role="dialog" aria-modal="true" aria-label={`Ficha de ${selectedCatalog.title}`} onClick={(event) => event.stopPropagation()}><button className="drawer-close" aria-label="Fechar ficha" onClick={() => setSelectedCatalog(null)}>×</button><span className="family-badge">{selectedCatalog.family}</span><h2>{selectedCatalog.title}</h2><p className="drawer-spec">{selectedCatalog.spec}</p><div className="drawer-section"><span className="mini-label">QUANDO INDICAR</span><p>{selectedCatalog.bestFor}</p></div><div className="drawer-section pitch"><span className="mini-label">ARGUMENTO DE VENDA</span><p>“{selectedCatalog.pitch}”</p><div className="drawer-actions"><button className="copy-button" onClick={() => copyMessage(selectedCatalog.pitch)}>Copiar argumento <span>⧉</span></button><button className="copy-button" onClick={() => { setMessageLine(selectedCatalog.title); setSelectedCatalog(null); navigate("messages"); }}>Planejar mensagem <span>→</span></button></div></div><div className="drawer-section"><span className="mini-label">CONFIRMAR ANTES DE FECHAR</span>{selectedCatalog.checks.map((check) => <label className="drawer-check" key={check}><input type="checkbox" checked={drawerChecks[selectedCatalog.id]?.includes(check) ?? false} onChange={() => toggleCatalogCheck(selectedCatalog.id, check)} /><span className="fake-checkbox">✓</span>{check}</label>)}</div>{selectedCatalog.documentHref && <a className="catalog-pdf-link" href={selectedCatalog.documentHref} target="_blank" rel="noreferrer">Abrir catálogo completo em PDF <span>↗</span></a>}<div className="drawer-source"><span>Fonte</span><strong>{selectedCatalog.source}</strong><small>{brandData[selectedCatalog.brand].catalog}</small></div></aside></div>}
           </div>
         )}
 
