@@ -8,7 +8,7 @@ function asQuestion(value, fallback) {
 }
 
 export const providerTypeOptions = [
-  "Pedreiro",
+  "Prestador de serviços",
   "Empreiteiro ou construtor",
   "Instalador de portas ou esquadrias",
   "Arquiteto ou designer",
@@ -67,13 +67,13 @@ export const providerCompanyQuestionOptions = [
 export const providerMessageExamples = [
   {
     id: "provider-bricklayer",
-    tag: "Pedreiro · primeiro contato",
+    tag: "Prestador de serviços · primeiro contato",
     title: "Apresentação simples e cordial",
     message: "Oi, [nome]! Tudo bem? Aqui é [seu nome], da Mult Portas. Vi que você trabalha com obras na região e queria me apresentar. Trabalhamos com portas e esquadrias e podemos ajudar quando você ou algum cliente precisar de cotação. Você costuma indicar esse tipo de material nas obras?",
   },
   {
     id: "provider-builder",
-    tag: "Pedreiro ou empreiteiro",
+    tag: "Prestador de serviços ou empreiteiro",
     title: "Contato para a próxima obra",
     message: "Oi, [nome]! Tudo bem? Aqui é [seu nome], da Mult Portas. A gente trabalha com portas e esquadrias e também ajuda a organizar as opções antes da cotação. Queria deixar nosso contato à disposição para quando aparecer alguma demanda na obra. Posso te enviar uma apresentação curta?",
   },
