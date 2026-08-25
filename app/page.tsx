@@ -38,7 +38,7 @@ type TrainingFilter = "Todos" | TrainingLevel;
 type QuickMessageChannel = "WhatsApp" | "Áudio";
 type QuickMessageTone = "Consultivo" | "Direto" | "Próximo";
 type QuickMessageAudience = "Cliente" | "Prestador";
-type ProviderPresentationProfile = "Empresa" | "Pedreiro";
+type ProviderPresentationProfile = "Empresa" | "Prestador de Serviço";
 type SaveStatus = "idle" | "saving" | "saved" | "offline" | "error" | "conflict";
 type ToastKind = "success" | "error" | "info";
 
@@ -2594,7 +2594,7 @@ export default function Home() {
   const [messageChannel, setMessageChannel] = useState<QuickMessageChannel>("WhatsApp");
   const [messageTone, setMessageTone] = useState<QuickMessageTone>("Consultivo");
   const [messageProof, setMessageProof] = useState({ company: true, quality: true, guarantee: true });
-  const [providerProfile, setProviderProfile] = useState<ProviderPresentationProfile>("Pedreiro");
+  const [providerProfile, setProviderProfile] = useState<ProviderPresentationProfile>("Prestador de Serviço");
   const [providerName, setProviderName] = useState("");
   const [providerType, setProviderType] = useState(providerTypeOptions[0]);
   const [providerRegion, setProviderRegion] = useState("Araraquara e região");
@@ -2872,7 +2872,7 @@ export default function Home() {
         quality: planner.proof?.quality !== false,
         guarantee: planner.proof?.guarantee !== false,
       });
-      const savedProviderProfile: ProviderPresentationProfile = planner.provider?.profile === "Empresa" ? "Empresa" : "Pedreiro";
+      const savedProviderProfile: ProviderPresentationProfile = planner.provider?.profile === "Empresa" ? "Empresa" : "Prestador de Serviço";
       const savedProviderTypeOptions = savedProviderProfile === "Empresa" ? providerCompanyTypeOptions : providerTypeOptions;
       const savedProviderGoalOptions = savedProviderProfile === "Empresa" ? providerCompanyGoalOptions : providerGoalOptions;
       const savedProviderQuestionOptions = savedProviderProfile === "Empresa" ? providerCompanyQuestionOptions : providerQuestionOptions;
@@ -3206,7 +3206,7 @@ export default function Home() {
   const messagePendingFields = useMemo(() => {
     const pending: string[] = [];
     if (messageAudience === "Prestador") {
-      if (!providerType.trim()) pending.push(providerProfile === "Empresa" ? "segmento da empresa" : "atividade do pedreiro");
+      if (!providerType.trim()) pending.push(providerProfile === "Empresa" ? "segmento da empresa" : "atividade do prestador de serviço");
       if (!providerRegion.trim()) pending.push("cidade ou região de atendimento");
       if (!providerQuestion.trim()) pending.push("pergunta para continuar a conversa");
       pending.push(providerProfile === "Empresa" ? "responsável comercial e interesse na parceria" : "interesse na parceria e melhor canal de retorno");
@@ -4266,20 +4266,20 @@ export default function Home() {
 
         {section === "messages" && (
           <div className="page-content">
-            <div className="section-intro messages-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> CENTRAL DE MENSAGENS</span><h1>{messageAudience === "Prestador" ? <>Uma boa apresentação.<br /><em>Para abrir parcerias.</em></> : <>Uma mensagem certa.<br /><em>Para cada linha.</em></>}</h1><p>{messageAudience === "Prestador" ? "Escolha com quem vai falar. O texto mantém o cuidado necessário com empresas e usa uma linguagem mais próxima com pedreiros." : "Monte uma abertura curta para WhatsApp ou áudio, com o produto, o ambiente, o objetivo e a próxima pergunta já organizados."}</p></div><div className="message-count"><strong>41</strong><span>anos para transmitir confiança</span><small>85 cidades atendidas</small></div></div>
+            <div className="section-intro messages-intro"><div><span className="eyebrow"><span className="eyebrow-line" /> CENTRAL DE MENSAGENS</span><h1>{messageAudience === "Prestador" ? <>Uma boa apresentação.<br /><em>Para abrir parcerias.</em></> : <>Uma mensagem certa.<br /><em>Para cada linha.</em></>}</h1><p>{messageAudience === "Prestador" ? "Escolha com quem vai falar. O texto mantém o cuidado necessário com empresas e usa uma linguagem mais próxima com prestadores de serviço." : "Monte uma abertura curta para WhatsApp ou áudio, com o produto, o ambiente, o objetivo e a próxima pergunta já organizados."}</p></div><div className="message-count"><strong>41</strong><span>anos para transmitir confiança</span><small>85 cidades atendidas</small></div></div>
 
             <section className="message-audience-switch panel" aria-label="Escolher destinatário da mensagem"><div><span className="section-kicker">QUEM VAI RECEBER?</span><h2>Separe atendimento de prospecção</h2><p>Os dados de cliente e prestador ficam organizados em planejadores diferentes.</p></div><div className="message-audience-options"><button type="button" className={messageAudience === "Cliente" ? "active" : ""} aria-pressed={messageAudience === "Cliente"} onClick={() => setMessageAudience("Cliente")}><span>01</span><strong>Cliente</strong><small>Atendimento, produto e orçamento</small></button><button type="button" className={messageAudience === "Prestador" ? "active partner" : "partner"} aria-pressed={messageAudience === "Prestador"} onClick={() => setMessageAudience("Prestador")}><span>02</span><strong>Prestador / parceiro</strong><small>Apresentação e início de parceria</small></button></div></section>
 
             <section className={`message-trust panel ${messageAudience === "Prestador" ? "partner" : ""}`}><div><span className="message-trust-icon">✓</span><div><strong>{messageAudience === "Prestador" ? (providerProfile === "Empresa" ? "Formal sem parecer distante" : "Próximo sem perder o respeito") : "Prova institucional sem discurso pesado"}</strong><p>{messageAudience === "Prestador" ? (providerProfile === "Empresa" ? "Diga quem você é, explique como pode ajudar e termine com uma pergunta fácil de responder." : "Use uma linguagem do dia a dia, seja educado e deixe claro que o contato pode ajudar nas próximas obras.") : "A mensagem pode ressaltar experiência, qualidade e garantia — depois volta para a necessidade real do cliente."}</p></div></div><div className="message-trust-points"><span>41 anos</span><span>85 cidades</span><span>{messageAudience === "Prestador" ? "Portfólio" : "Qualidade"}</span><span>{messageAudience === "Prestador" ? "Apoio técnico" : "Garantia da linha"}</span></div></section>
-            {messageAudience === "Prestador" && <div className={`provider-contact-note ${providerProfile === "Empresa" ? "formal" : "informal"}`}><span>✦</span><p><strong>{providerProfile === "Empresa" ? "Contato com empresas:" : "Contato com pedreiros:"}</strong> {providerProfile === "Empresa" ? "use o nome da empresa quando souber. Se ainda não tiver o contato de compras ou obras, peça essa orientação com educação e sem tentar apresentar tudo de uma vez." : "fale como você falaria com um profissional da região: direto, educado e sem gírias. A primeira mensagem só precisa abrir a conversa."}</p></div>}
+            {messageAudience === "Prestador" && <div className={`provider-contact-note ${providerProfile === "Empresa" ? "formal" : "informal"}`}><span>✦</span><p><strong>{providerProfile === "Empresa" ? "Contato com empresas:" : "Contato com prestadores de serviço:"}</strong> {providerProfile === "Empresa" ? "use o nome da empresa quando souber. Se ainda não tiver o contato de compras ou obras, peça essa orientação com educação e sem tentar apresentar tudo de uma vez." : "fale como você falaria com um profissional da região: direto, educado e sem gírias. A primeira mensagem só precisa abrir a conversa."}</p></div>}
 
             <div className="message-layout">
               <section className="panel message-form-panel">
                 <div className="panel-heading"><div><span className="section-kicker">PLANEJADOR</span><h2>{messageAudience === "Prestador" ? "Monte sua apresentação" : "Preencha em menos de um minuto"}</h2></div><span className="planner-live"><span /> ao vivo</span></div>
-                {messageAudience === "Prestador" && <div className="provider-profile-switch"><span className="section-kicker">TIPO DE APRESENTAÇÃO</span><div className="provider-profile-options"><button type="button" className={providerProfile === "Empresa" ? "active formal" : "formal"} aria-pressed={providerProfile === "Empresa"} onClick={() => selectProviderProfile("Empresa")}><span>01</span><div><strong>Empresas</strong><small>Cordial, profissional e sem cara de texto pronto</small></div></button><button type="button" className={providerProfile === "Pedreiro" ? "active informal" : "informal"} aria-pressed={providerProfile === "Pedreiro"} onClick={() => selectProviderProfile("Pedreiro")}><span>02</span><div><strong>Pedreiros</strong><small>Direto, respeitoso e com linguagem do dia a dia</small></div></button></div></div>}
+                {messageAudience === "Prestador" && <div className="provider-profile-switch"><span className="section-kicker">TIPO DE APRESENTAÇÃO</span><div className="provider-profile-options"><button type="button" className={providerProfile === "Empresa" ? "active formal" : "formal"} aria-pressed={providerProfile === "Empresa"} onClick={() => selectProviderProfile("Empresa")}><span>01</span><div><strong>Empresas</strong><small>Cordial, profissional e sem cara de texto pronto</small></div></button><button type="button" className={providerProfile === "Prestador de Serviço" ? "active informal" : "informal"} aria-pressed={providerProfile === "Prestador de Serviço"} onClick={() => selectProviderProfile("Prestador de Serviço")}><span>02</span><div><strong>Prestador de Serviço</strong><small>Direto, respeitoso e com linguagem do dia a dia</small></div></button></div></div>}
                 <div className="message-form-grid">
                   {messageAudience === "Prestador" ? <>
-                    <label><span>{providerProfile === "Empresa" ? "Empresa ou contato (opcional)" : "Nome do pedreiro (opcional)"}</span><input value={providerName} onChange={(event) => setProviderName(event.target.value)} placeholder={providerProfile === "Empresa" ? "Ex.: Construtora Horizonte" : "Ex.: Carlos"} /></label>
+                    <label><span>{providerProfile === "Empresa" ? "Empresa ou contato (opcional)" : "Nome do prestador de serviço (opcional)"}</span><input value={providerName} onChange={(event) => setProviderName(event.target.value)} placeholder={providerProfile === "Empresa" ? "Ex.: Construtora Horizonte" : "Ex.: Carlos"} /></label>
                     <label><span>{providerProfile === "Empresa" ? "Segmento da empresa" : "Atividade profissional"}</span><select value={providerType} onChange={(event) => setProviderType(event.target.value)}>{providerTypeChoices.map((option) => <option key={option}>{option}</option>)}</select></label>
                     <div className="message-suggestions"><span>{providerProfile === "Empresa" ? "Atalhos de segmento" : "Atalhos de profissão"}</span><div>{providerTypeChoices.map((option) => <button key={option} type="button" className={providerType === option ? "active" : ""} onClick={() => setProviderType(option)}>{option}</button>)}</div></div>
                     <label><span>Cidade ou região</span><input value={providerRegion} onChange={(event) => setProviderRegion(event.target.value)} placeholder="Ex.: Araraquara e região" /></label>
@@ -4311,7 +4311,7 @@ export default function Home() {
               </section>
             </div>
 
-            <section className="message-examples"><div className="section-intro-mini"><span className="section-kicker">{messageAudience === "Prestador" ? `${providerProfile === "Empresa" ? "MODELOS PARA FALAR COM EMPRESAS" : "MODELOS PARA FALAR COM PEDREIROS"}` : "ABERTURAS QUE PODEM SER ADAPTADAS"}</span><h2>{messageAudience === "Prestador" ? (providerProfile === "Empresa" ? "Mensagens profissionais que ainda parecem escritas por uma pessoa." : "Mensagens simples, respeitosas e prontas para usar.") : "Comece simples. Personalize na resposta."}</h2></div><div className="message-example-grid">{(messageAudience === "Prestador" ? providerExampleChoices : openingRecommendations.slice(0, 4)).map((item) => <article key={item.id}><span>{item.tag}</span><strong>{item.title}</strong><p>{item.message}</p><button className="copy-button" onClick={() => copyMessage(item.message, messageAudience === "Prestador" ? "Apresentação" : "Exemplo")}>{messageAudience === "Prestador" ? "Copiar apresentação" : "Copiar exemplo"} <span>⧉</span></button></article>)}</div></section>
+            <section className="message-examples"><div className="section-intro-mini"><span className="section-kicker">{messageAudience === "Prestador" ? `${providerProfile === "Empresa" ? "MODELOS PARA FALAR COM EMPRESAS" : "MODELOS PARA FALAR COM PRESTADORES DE SERVIÇO"}` : "ABERTURAS QUE PODEM SER ADAPTADAS"}</span><h2>{messageAudience === "Prestador" ? (providerProfile === "Empresa" ? "Mensagens profissionais que ainda parecem escritas por uma pessoa." : "Mensagens simples, respeitosas e prontas para usar.") : "Comece simples. Personalize na resposta."}</h2></div><div className="message-example-grid">{(messageAudience === "Prestador" ? providerExampleChoices : openingRecommendations.slice(0, 4)).map((item) => <article key={item.id}><span>{item.tag}</span><strong>{item.title}</strong><p>{item.message}</p><button className="copy-button" onClick={() => copyMessage(item.message, messageAudience === "Prestador" ? "Apresentação" : "Exemplo")}>{messageAudience === "Prestador" ? "Copiar apresentação" : "Copiar exemplo"} <span>⧉</span></button></article>)}</div></section>
           </div>
         )}
 

@@ -8,7 +8,7 @@ function asQuestion(value, fallback) {
 }
 
 export const providerTypeOptions = [
-  "Prestador de serviços",
+  "Prestador de Serviço",
   "Empreiteiro ou construtor",
   "Instalador de portas ou esquadrias",
   "Arquiteto ou designer",
@@ -66,14 +66,14 @@ export const providerCompanyQuestionOptions = [
 
 export const providerMessageExamples = [
   {
-    id: "provider-bricklayer",
-    tag: "Prestador de serviços · primeiro contato",
+    id: "provider-service-professional",
+    tag: "Prestador de Serviço · primeiro contato",
     title: "Apresentação simples e cordial",
     message: "Oi, [nome]! Tudo bem? Aqui é [seu nome], da Mult Portas. Vi que você trabalha com obras na região e queria me apresentar. Trabalhamos com portas e esquadrias e podemos ajudar quando você ou algum cliente precisar de cotação. Você costuma indicar esse tipo de material nas obras?",
   },
   {
     id: "provider-builder",
-    tag: "Prestador de serviços ou empreiteiro",
+    tag: "Prestador de Serviço ou empreiteiro",
     title: "Contato para a próxima obra",
     message: "Oi, [nome]! Tudo bem? Aqui é [seu nome], da Mult Portas. A gente trabalha com portas e esquadrias e também ajuda a organizar as opções antes da cotação. Queria deixar nosso contato à disposição para quando aparecer alguma demanda na obra. Posso te enviar uma apresentação curta?",
   },
@@ -119,7 +119,7 @@ export const providerCompanyMessageExamples = [
 ];
 
 export function buildProviderMessage(input = {}) {
-  const profile = input.profile === "Empresa" ? "Empresa" : "Pedreiro";
+  const profile = input.profile === "Empresa" ? "Empresa" : "Prestador de Serviço";
   const contactName = cleanText(input.contactName, 120);
   const senderName = cleanText(input.senderName, 120);
   const providerType = cleanText(input.providerType, 160) || (profile === "Empresa" ? "construção civil e obras" : "serviços da construção");
@@ -128,7 +128,7 @@ export function buildProviderMessage(input = {}) {
   const question = asQuestion(input.question, profile === "Empresa" ? "vocês costumam comprar ou indicar portas e esquadrias para as obras" : "você costuma indicar portas e esquadrias para os seus clientes");
   const tone = ["Consultivo", "Direto", "Próximo"].includes(input.tone) ? input.tone : "Consultivo";
 
-  const professionalLabel = `${providerType.charAt(0).toLocaleLowerCase("pt-BR")}${providerType.slice(1)}`;
+  const professionalLabel = providerType.toLocaleLowerCase("pt-BR");
   const lowerQuestion = `${question.charAt(0).toLocaleLowerCase("pt-BR")}${question.slice(1)}`;
   const capitalizedQuestion = `${question.charAt(0).toLocaleUpperCase("pt-BR")}${question.slice(1)}`;
   const punctuatedObjective = `${objective}${/[.!?]$/.test(objective) ? "" : "."}`;

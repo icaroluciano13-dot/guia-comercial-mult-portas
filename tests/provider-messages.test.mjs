@@ -11,7 +11,7 @@ import { GUIDE_STATE_VERSION, normalizeEmployeeState } from "../app/api/data/sta
 
 test("monta uma apresentação completa para o prestador", () => {
   const message = buildProviderMessage({
-    profile: "Pedreiro",
+    profile: "Prestador de Serviço",
     contactName: "Carlos",
     senderName: "Marina",
     providerType: "Empreiteiro ou construtor",
@@ -28,7 +28,7 @@ test("monta uma apresentação completa para o prestador", () => {
   assert.doesNotMatch(message, /undefined|\[object Object\]/);
 });
 
-test("separa a apresentação formal de empresas da abordagem próxima para pedreiros", () => {
+test("separa a apresentação formal de empresas da abordagem próxima para prestadores de serviço", () => {
   const company = buildProviderMessage({
     profile: "Empresa",
     contactName: "Construtora Horizonte",
@@ -39,11 +39,11 @@ test("separa a apresentação formal de empresas da abordagem próxima para pedr
     question: "com quem posso conversar sobre compras e especificações para as obras?",
     tone: "Próximo",
   });
-  const bricklayer = buildProviderMessage({
-    profile: "Pedreiro",
+  const serviceProvider = buildProviderMessage({
+    profile: "Prestador de Serviço",
     contactName: "Carlos",
     senderName: "Marina",
-    providerType: "Pedreiro",
+    providerType: "Prestador de Serviço",
     region: "Araraquara e região",
     objective: "me apresentar e abrir uma possível parceria",
     question: "você atende obras em Araraquara ou cidades da região?",
@@ -53,14 +53,16 @@ test("separa a apresentação formal de empresas da abordagem próxima para pedr
   assert.match(company, /^Olá, Construtora Horizonte, tudo bem\?/);
   assert.match(company, /falo pela Mult Portas|valia a pena nos apresentarmos|A ideia é/i);
   assert.doesNotMatch(company, /\ba gente\b|Tudo certo/i);
-  assert.match(bricklayer, /^Oi, Carlos! Tudo bem\?/);
-  assert.match(bricklayer, /\ba gente\b|valia a pena/i);
+  assert.match(serviceProvider, /^Oi, Carlos! Tudo bem\?/);
+  assert.match(serviceProvider, /\ba gente\b|valia a pena/i);
+  assert.match(serviceProvider, /prestador de serviço/);
+  assert.doesNotMatch(serviceProvider, new RegExp("pedre" + "iro", "i"));
   assert.doesNotMatch(company, /sinergia|objetivo deste contato|identifiquei que|para direcionarmos/i);
-  assert.doesNotMatch(bricklayer, /sinergia|objetivo deste contato|identifiquei que|para direcionarmos/i);
+  assert.doesNotMatch(serviceProvider, /sinergia|objetivo deste contato|identifiquei que|para direcionarmos/i);
 });
 
 test("gera mensagens utilizáveis em todos os canais e tons", () => {
-  for (const profile of ["Empresa", "Pedreiro"]) {
+  for (const profile of ["Empresa", "Prestador de Serviço"]) {
     for (const channel of ["WhatsApp", "Áudio"]) {
       for (const tone of ["Consultivo", "Direto", "Próximo"]) {
         const message = buildProviderMessage({ profile, channel, tone });
@@ -74,10 +76,12 @@ test("gera mensagens utilizáveis em todos os canais e tons", () => {
   assert.equal(providerMessageExamples.length, 4);
   assert.equal(providerCompanyMessageExamples.length, 4);
   assert.ok(providerMessageExamples.every((example) => example.message.includes("Mult Portas")));
+  assert.ok(providerMessageExamples.some((example) => example.tag.includes("Prestador de Serviço")));
   assert.ok(providerCompanyMessageExamples.every((example) => example.message.includes("Mult Portas")));
   for (const example of [...providerMessageExamples, ...providerCompanyMessageExamples]) {
     assert.ok(example.message.length < 600, `${example.id} deve caber em um primeiro contato de WhatsApp`);
     assert.doesNotMatch(example.message, /sinergia|objetivo deste contato|identifiquei que|para direcionarmos/i);
+    assert.doesNotMatch(`${example.tag} ${example.title} ${example.message}`, new RegExp("pedre" + "iro", "i"));
   }
 });
 
@@ -112,7 +116,7 @@ test("persiste o planejador de prestadores sem misturar os dados do cliente", ()
   const legacy = normalizeEmployeeState({ messages: { name: "João" } });
   assert.equal(legacy.messages.audience, "Cliente");
   assert.equal(legacy.messages.name, "João");
-  assert.deepEqual(legacy.messages.provider, { profile: "Pedreiro", name: "", type: "", region: "", objective: "", question: "" });
+  assert.deepEqual(legacy.messages.provider, { profile: "Prestador de Serviço", name: "", type: "", region: "", objective: "", question: "" });
 });
 
 test("expõe o modo separado de prestadores com seleção acessível", async () => {
@@ -122,9 +126,10 @@ test("expõe o modo separado de prestadores com seleção acessível", async () 
   assert.match(page, /Prestador \/ parceiro/);
   assert.match(page, /aria-pressed=\{messageAudience === "Prestador"\}/);
   assert.match(page, /aria-pressed=\{providerProfile === "Empresa"\}/);
-  assert.match(page, /aria-pressed=\{providerProfile === "Pedreiro"\}/);
+  assert.match(page, /aria-pressed=\{providerProfile === "Prestador de Serviço"\}/);
   assert.match(page, />Empresas</);
-  assert.match(page, />Pedreiros</);
+  assert.match(page, />Prestador de Serviço</);
   assert.match(page, /providerMessageExamples/);
+  assert.doesNotMatch(`${page}\n${moduleSource}`, new RegExp("pedre" + "iro", "i"));
   assert.doesNotMatch(moduleSource, /GPT|OpenAI/i);
 });

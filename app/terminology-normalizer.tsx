@@ -3,10 +3,10 @@
 import { useEffect } from "react";
 
 const replacements: Array<[RegExp, string]> = [
-  [/\bPedreiros\b/g, "Prestadores de serviços"],
-  [/\bpedreiros\b/g, "prestadores de serviços"],
-  [/\bPedreiro\b/g, "Prestador de serviços"],
-  [/\bpedreiro\b/g, "prestador de serviços"],
+  [/\bPedreiros\b/g, "Prestadores de Serviço"],
+  [/\bpedreiros\b/g, "prestadores de serviço"],
+  [/\bPedreiro\b/g, "Prestador de Serviço"],
+  [/\bpedreiro\b/g, "prestador de serviço"],
 ];
 
 function normalizeText(value: string) {

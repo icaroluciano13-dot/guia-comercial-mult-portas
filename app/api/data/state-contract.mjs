@@ -122,7 +122,7 @@ function normalizeMessages(value) {
       guarantee: proof.guarantee !== false,
     },
     provider: {
-      profile: provider.profile === "Empresa" ? "Empresa" : "Pedreiro",
+      profile: provider.profile === "Empresa" ? "Empresa" : "Prestador de Serviço",
       name: cleanString(provider.name, 120),
       type: cleanString(provider.type, 160),
       region: cleanString(provider.region, 160),
