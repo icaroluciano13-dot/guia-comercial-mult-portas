@@ -108,6 +108,9 @@ function normalizeMessages(value) {
   const proof = isRecord(source.proof) ? source.proof : {};
   const provider = isRecord(source.provider) ? source.provider : {};
   const fair = isRecord(source.fair) ? source.fair : {};
+  const fairEmojiMode = ["mixed", "none", "light", "balanced", "expressive"].includes(fair.emojiMode)
+    ? fair.emojiMode
+    : fair.includeEmojis === false ? "none" : "mixed";
   return {
     audience: source.audience === "Prestador" ? "Prestador" : "Cliente",
     name: cleanString(source.name, 120),
@@ -141,7 +144,8 @@ function normalizeMessages(value) {
       eventTime: cleanString(fair.eventTime, 80) || "das 9h às 17h",
       city: cleanString(fair.city, 120) || "Araraquara",
       discount: cleanString(fair.discount, 80) || "até 60% OFF",
-      includeEmojis: fair.includeEmojis !== false,
+      emojiMode: fairEmojiMode,
+      includeEmojis: fairEmojiMode !== "none",
     },
   };
 }
