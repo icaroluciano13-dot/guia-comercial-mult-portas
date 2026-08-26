@@ -19,10 +19,13 @@ import {
 } from "./lib/dalcomad-kit.mjs";
 import { downloadWorkbook } from "./lib/xlsx-export.mjs";
 import {
+  FAIR_VARIATION_COUNT,
   buildFairMessage,
   fairClientProfiles,
+  fairEmojiModes,
   fairInterestOptions,
   fairToneOptions,
+  nextFairVariation,
 } from "./lib/fair-message.mjs";
 import {
   buildProviderMessage,
@@ -47,6 +50,7 @@ type QuickMessageAudience = "Cliente" | "Prestador";
 type ProviderPresentationProfile = "Empresa" | "Prestador de Serviço";
 type FairProfileId = "neutral" | "quote" | "store-visit" | "reengagement" | "construction" | "price" | "returning";
 type FairTone = "welcoming" | "direct" | "persuasive";
+type FairEmojiMode = "mixed" | "none" | "light" | "balanced" | "expressive";
 type SaveStatus = "idle" | "saving" | "saved" | "offline" | "error" | "conflict";
 type ToastKind = "success" | "error" | "info";
 
@@ -2619,7 +2623,8 @@ export default function Home() {
   const [fairEventTime, setFairEventTime] = useState("das 9h às 17h");
   const [fairCity, setFairCity] = useState("Araraquara");
   const [fairDiscount, setFairDiscount] = useState("até 60% OFF");
-  const [fairIncludeEmojis, setFairIncludeEmojis] = useState(true);
+  const [fairEmojiMode, setFairEmojiMode] = useState<FairEmojiMode>("mixed");
+  const [fairVariation, setFairVariation] = useState(0);
   const [catalogSearch, setCatalogSearch] = useState("");
   const [catalogFamily, setCatalogFamily] = useState("Todas");
   const [selectedCatalog, setSelectedCatalog] = useState<CatalogItem | null>(null);
@@ -2888,6 +2893,7 @@ export default function Home() {
             eventTime?: string;
             city?: string;
             discount?: string;
+            emojiMode?: FairEmojiMode;
             includeEmojis?: boolean;
           };
         }>
@@ -2925,7 +2931,9 @@ export default function Home() {
       setFairEventTime(typeof planner.fair?.eventTime === "string" && planner.fair.eventTime ? planner.fair.eventTime : "das 9h às 17h");
       setFairCity(typeof planner.fair?.city === "string" && planner.fair.city ? planner.fair.city : "Araraquara");
       setFairDiscount(typeof planner.fair?.discount === "string" && planner.fair.discount ? planner.fair.discount : "até 60% OFF");
-      setFairIncludeEmojis(planner.fair?.includeEmojis !== false);
+      setFairEmojiMode(fairEmojiModes.some((mode) => mode.id === planner.fair?.emojiMode)
+        ? planner.fair?.emojiMode as FairEmojiMode
+        : planner.fair?.includeEmojis === false ? "none" : "mixed");
       setSaveStatus(usingLocalBackup ? (navigator.onLine ? "saving" : "offline") : "saved");
       setToday(formatToday());
       skipNextAutosaveRef.current = !usingLocalBackup;
@@ -3038,7 +3046,8 @@ export default function Home() {
           eventTime: fairEventTime,
           city: fairCity,
           discount: fairDiscount,
-          includeEmojis: fairIncludeEmojis,
+          emojiMode: fairEmojiMode,
+          includeEmojis: fairEmojiMode !== "none",
         },
       },
     };
@@ -3075,7 +3084,7 @@ export default function Home() {
       window.clearTimeout(timer);
       if (saveTimerRef.current === timer) saveTimerRef.current = null;
     };
-  }, [authUser, dailyDone, dataLoaded, doneSales, doneTiming, drawerChecks, factoryItems, fairChannel, fairCity, fairClientName, fairConsultantName, fairDiscount, fairEventDate, fairEventTime, fairIncludeEmojis, fairInterest, fairProfileId, fairTone, flushPendingState, followUps, hydrated, messageAudience, messageChannel, messageEnvironment, messageLine, messageName, messageObjective, messageProof, messageQuestion, messageTone, metrics, providerName, providerObjective, providerProfile, providerQuestion, providerRegion, providerType, trainingStats]);
+  }, [authUser, dailyDone, dataLoaded, doneSales, doneTiming, drawerChecks, factoryItems, fairChannel, fairCity, fairClientName, fairConsultantName, fairDiscount, fairEmojiMode, fairEventDate, fairEventTime, fairInterest, fairProfileId, fairTone, flushPendingState, followUps, hydrated, messageAudience, messageChannel, messageEnvironment, messageLine, messageName, messageObjective, messageProof, messageQuestion, messageTone, metrics, providerName, providerObjective, providerProfile, providerQuestion, providerRegion, providerType, trainingStats]);
 
   useEffect(() => {
     if (!authUserId) return;
@@ -3285,13 +3294,23 @@ export default function Home() {
     eventTime: fairEventTime,
     city: fairCity,
     discount: fairDiscount,
-    includeEmojis: fairIncludeEmojis,
-  }), [authUser?.displayName, fairChannel, fairCity, fairClientName, fairConsultantName, fairDiscount, fairEventDate, fairEventTime, fairIncludeEmojis, fairInterest, fairProfileId, fairTone]);
+    emojiMode: fairEmojiMode,
+    variation: fairVariation,
+  }), [authUser?.displayName, fairChannel, fairCity, fairClientName, fairConsultantName, fairDiscount, fairEmojiMode, fairEventDate, fairEventTime, fairInterest, fairProfileId, fairTone, fairVariation]);
   const fairMessage = useMemo(() => buildFairMessage(fairMessageInput), [fairMessageInput]);
   const fairProfileMessages = useMemo(() => fairClientProfiles.map((profile) => ({
     ...profile,
     message: buildFairMessage({ ...fairMessageInput, profileId: profile.id }),
   })), [fairMessageInput]);
+
+  function randomizeFairMessage() {
+    const randomValues = new Uint32Array(1);
+    window.crypto.getRandomValues(randomValues);
+    window.speechSynthesis?.cancel();
+    setSpeakingMessageId(null);
+    setFairVariation((current) => nextFairVariation(current, randomValues[0]));
+    showToast("Nova versão pronta — seus dados foram mantidos.");
+  }
 
   function selectProviderProfile(profile: ProviderPresentationProfile) {
     setProviderProfile(profile);
@@ -4405,7 +4424,7 @@ export default function Home() {
             <section className="panel fair-promise">
               <div className="fair-promise-icon">✦</div>
               <div><span className="section-kicker">MONTAGEM RÁPIDA</span><h2>Uma abordagem certa para cada momento do cliente</h2><p>A mensagem muda o contexto sem inventar informações, pressionar ou cobrar resposta. Você só confere os dados e envia.</p></div>
-              <div className="fair-promise-points"><span>7 perfis</span><span>WhatsApp</span><span>Áudio</span><span>Sem pressão</span></div>
+              <div className="fair-promise-points"><span>7 perfis</span><span>144 variações por opção</span><span>WhatsApp</span><span>Áudio</span><span>Sem pressão</span></div>
             </section>
 
             <div className="fair-layout">
@@ -4438,12 +4457,13 @@ export default function Home() {
                   </div>
                 </div>
 
-                <label className={`fair-emoji-toggle ${fairChannel === "Áudio" ? "disabled" : ""}`}><input type="checkbox" checked={fairIncludeEmojis && fairChannel === "WhatsApp"} disabled={fairChannel === "Áudio"} onChange={(event) => setFairIncludeEmojis(event.target.checked)} /><span className="fake-checkbox">✓</span><span><strong>Emojis leves</strong><small>{fairChannel === "Áudio" ? "O roteiro de áudio fica limpo automaticamente." : "Use apenas para deixar o WhatsApp mais acolhedor."}</small></span></label>
+                <div className={`fair-emoji-control ${fairChannel === "Áudio" ? "disabled" : ""}`}><div><span className="mini-label">EMOJIS NA MENSAGEM</span><small>{fairChannel === "Áudio" ? "O roteiro de áudio fica limpo automaticamente." : fairEmojiModes.find((mode) => mode.id === fairEmojiMode)?.description}</small></div><div className="fair-emoji-options" role="group" aria-label="Quantidade de emojis">{fairEmojiModes.map((mode) => <button key={mode.id} type="button" disabled={fairChannel === "Áudio"} className={fairEmojiMode === mode.id ? "active" : ""} aria-pressed={fairEmojiMode === mode.id} onClick={() => setFairEmojiMode(mode.id as FairEmojiMode)}>{mode.label}</button>)}</div></div>
               </section>
 
               <section className="panel fair-preview-panel">
                 <div className="message-preview-head"><div><span className="section-kicker">CONVITE PRONTO</span><h2>{fairChannel === "Áudio" ? "Roteiro natural para falar" : "Mensagem pronta para enviar"}</h2></div><div className="message-preview-actions"><button className="copy-button" type="button" onClick={() => speakText(fairMessage, "fair-message")}>{speakingMessageId === "fair-message" ? "Parar áudio" : "Ouvir"} <span>{speakingMessageId === "fair-message" ? "■" : "▶"}</span></button><button className="copy-button" type="button" onClick={() => copyMessage(fairMessage, "Convite do Feirão")}>Copiar <span>⧉</span></button></div></div>
-                <div className={`fair-preview-bubble ${fairChannel === "Áudio" ? "audio" : ""}`} aria-live="polite"><div className="preview-label"><span>{fairChannel.toUpperCase()} · {fairClientProfiles.find((profile) => profile.id === fairProfileId)?.shortLabel.toUpperCase()}</span><span>{fairToneOptions.find((tone) => tone.id === fairTone)?.label.toUpperCase()}</span></div><p>{fairMessage}</p></div>
+                <div key={fairVariation} className={`fair-preview-bubble ${fairChannel === "Áudio" ? "audio" : ""}`} aria-live="polite"><div className="preview-label"><span>{fairChannel.toUpperCase()} · {fairClientProfiles.find((profile) => profile.id === fairProfileId)?.shortLabel.toUpperCase()}</span><span>{fairToneOptions.find((tone) => tone.id === fairTone)?.label.toUpperCase()}</span></div><p>{fairMessage}</p></div>
+                <div className="fair-randomizer"><div><span className="mini-label">VARIAÇÃO INSTANTÂNEA</span><p>Troque a redação sem alterar cliente, produto ou dados do Feirão.</p></div><button className="fair-randomize-button" type="button" onClick={randomizeFairMessage} aria-label="Gerar outra versão do convite"><span aria-hidden="true">↻</span><span><strong>Gerar outra versão</strong><small>Versão {fairVariation + 1} de {FAIR_VARIATION_COUNT}</small></span></button></div>
                 <div className="message-next"><span className="mini-label">POR QUE FUNCIONA</span><p>{fairClientProfiles.find((profile) => profile.id === fairProfileId)?.description} O convite apresenta a condição com clareza e termina com uma pergunta fácil de responder.</p></div>
                 <div className="fair-checklist"><span className="mini-label">ANTES DE ENVIAR</span><div><span>✓ confirme nome e interesse</span><span>✓ confira data e horário</span><span>✓ mantenha “até” no desconto</span><span>✓ envie sem cobrar resposta</span></div></div>
                 <button className="button dark full" type="button" onClick={() => copyMessage(fairMessage, fairChannel === "Áudio" ? "Roteiro do Feirão" : "Convite do Feirão")}>{fairChannel === "Áudio" ? "Copiar roteiro de áudio" : "Copiar para o WhatsApp"} <span>⧉</span></button>
