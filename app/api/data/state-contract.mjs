@@ -107,6 +107,7 @@ function normalizeMessages(value) {
   const source = isRecord(value) ? value : {};
   const proof = isRecord(source.proof) ? source.proof : {};
   const provider = isRecord(source.provider) ? source.provider : {};
+  const fair = isRecord(source.fair) ? source.fair : {};
   return {
     audience: source.audience === "Prestador" ? "Prestador" : "Cliente",
     name: cleanString(source.name, 120),
@@ -128,6 +129,19 @@ function normalizeMessages(value) {
       region: cleanString(provider.region, 160),
       objective: cleanString(provider.objective, 240),
       question: cleanString(provider.question, 240),
+    },
+    fair: {
+      profileId: ["neutral", "quote", "store-visit", "reengagement", "construction", "price", "returning"].includes(fair.profileId) ? fair.profileId : "neutral",
+      clientName: cleanString(fair.clientName, 120),
+      consultantName: cleanString(fair.consultantName, 120),
+      interest: cleanString(fair.interest, 160),
+      channel: fair.channel === "Áudio" ? "Áudio" : "WhatsApp",
+      tone: ["welcoming", "direct", "persuasive"].includes(fair.tone) ? fair.tone : "welcoming",
+      eventDate: cleanString(fair.eventDate, 80) || "sábado, 29/08",
+      eventTime: cleanString(fair.eventTime, 80) || "das 9h às 17h",
+      city: cleanString(fair.city, 120) || "Araraquara",
+      discount: cleanString(fair.discount, 80) || "até 60% OFF",
+      includeEmojis: fair.includeEmojis !== false,
     },
   };
 }
