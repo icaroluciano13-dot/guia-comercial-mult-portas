@@ -726,6 +726,15 @@ h1 em { color: #cba66d; font-style: normal; }
 .fair-emoji-toggle strong { color: #5d6c64; font-size: 9px; }
 .fair-emoji-toggle small { color: #8c9791; font-size: 8px; }
 .fair-emoji-toggle.disabled { cursor: default; opacity: .62; }
+.fair-emoji-control { display: grid; gap: 10px; margin-top: 16px; padding: 13px; border: 1px solid #dce3df; border-radius: 10px; background: #f8faf9; }
+.fair-emoji-control > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.fair-emoji-control small { color: #829089; font-size: 8px; text-align: right; }
+.fair-emoji-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.fair-emoji-options button { min-height: 29px; padding: 0 9px; border: 1px solid #d7dfdc; border-radius: 99px; color: #718078; background: #fff; font-size: 8px; font-weight: 800; transition: .2s ease; }
+.fair-emoji-options button:hover:not(:disabled) { border-color: #bd9864; color: #835f34; background: #fff8ec; }
+.fair-emoji-options button.active { border-color: #9f7a48; color: #fff; background: #a47a43; box-shadow: 0 4px 10px rgba(119,79,31,.12); }
+.fair-emoji-control.disabled { opacity: .58; }
+.fair-emoji-options button:disabled { cursor: default; }
 .fair-preview-panel { display: flex; flex-direction: column; min-height: 590px; background: radial-gradient(circle at 100% 0, rgba(228,193,136,.18), transparent 34%), linear-gradient(145deg, #fff, #f4f1eb); }
 .fair-preview-bubble { position: relative; margin-top: 24px; padding: 19px 18px 20px; border: 1px solid #e1cda9; border-radius: 14px 14px 5px 14px; background: #fff7e9; box-shadow: 0 8px 22px rgba(124,88,40,.07); animation: fair-message-reveal .24s ease-out; }
 .fair-preview-bubble.audio { border-color: #cdd9de; background: #edf3f5; box-shadow: 0 8px 22px rgba(65,87,96,.06); }
@@ -810,6 +819,8 @@ h1 em { color: #cba66d; font-style: normal; }
   .fair-randomizer { align-items: stretch; flex-direction: column; }
   .fair-randomizer p { max-width: none; }
   .fair-randomize-button { justify-content: center; }
+  .fair-emoji-control > div:first-child { align-items: flex-start; flex-direction: column; }
+  .fair-emoji-control small { text-align: left; }
   .fair-builder-panel, .fair-preview-panel { padding: 18px; }
 }
 
